@@ -97,8 +97,9 @@ check("it stopped before asking anything",
       "Which side is this machine" not in out and "APT-REACHED" not in out,
       out[-300:])
 check("it exited non-zero", r.returncode != 0, str(r.returncode))
+# The repository is private, so the way to a whole one is copying it in again.
 check("and it says how to get a whole one",
-      "raw.githubusercontent.com" in out, out[-300:])
+      "Copy doctor-dns.sh to this machine again" in out and "doctor-dns-private" in out, out[-300:])
 
 print("so does one cut in the middle of the script")
 r = run(whole[:120000])
@@ -153,9 +154,10 @@ else:
     for p in pair:
         txt = open(p, encoding="utf-8").read()
         name = os.path.basename(p)
+        # The repository is private: the file is copied to each server, never
+        # fetched by it.
         check("%s names doctor-dns.sh" % name,
-              "raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/"
-              "doctor-dns.sh" in txt)
+              "scp doctor-dns.sh root@SERVER:" in txt and "raw.githubusercontent.com" not in txt)
         check("%s does not pipe curl into a shell" % name,
               "| sudo sh" not in txt and "| sudo bash" not in txt)
         check("%s has no get.sh left" % name, "get.sh" not in txt)

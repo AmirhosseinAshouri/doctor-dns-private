@@ -16,7 +16,7 @@ in one install script with no dependencies beyond what Debian ships.
 
 They are worth more than anything else right now. If something breaks, or a
 service you expected to work does not,
-[open an issue](https://github.com/AmirhosseinAshouri/doctor-dns/issues) — say which
+[open an issue](https://github.com/AmirhosseinAshouri/doctor-dns-private/issues) — say which
 side it was, what you ran, and what happened. A report of one console failing
 one download is a genuinely useful thing; most of what is in here was learnt
 exactly that way.
@@ -59,7 +59,7 @@ certificate naming no console host at all.
 | **Speed limits** | a per-customer download cap, shaped with htb + fq_codel rather than by dropping packets |
 | **Service templates** | which brands a customer's plan routes, down to individual domains; a few groups ship visible but unticked, because routing them breaks the thing they belong to |
 | **Customer panel** | sign up, register an address, see usage, send a payment receipt |
-| **Telegram bot** | the customer panel in Telegram, plus buying a plan - card to card or Zarinpal - and the operator's receipts, customers, plans and broadcasts |
+| **Telegram bot** | the customer panel in Telegram, plus buying a plan - card to card or Zibal - and the operator's receipts, customers, plans and broadcasts |
 | **Operator panel** | customers, templates, domains, host monitoring, backup and restore |
 | **TLS** | certificates obtained and renewed automatically, asking for nothing but a domain name |
 
@@ -93,15 +93,22 @@ address after the ISP has changed it:
 One script, run once on each machine. It asks which side it is on and the
 address of the other.
 
+This repository is private, so the servers never fetch anything from it:
+nothing on them has - or needs - a way in. Download `doctor-dns.sh` from the
+[releases](https://github.com/AmirhosseinAshouri/doctor-dns-private/releases) on your own computer, signed in, and copy it to each
+machine:
+
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh && sudo bash doctor-dns.sh
+gh release download -R AmirhosseinAshouri/doctor-dns-private -p doctor-dns.sh
+scp doctor-dns.sh root@SERVER:
+ssh -t root@SERVER 'bash doctor-dns.sh'
 ```
 
-It downloads rather than pipes on purpose. Every config this installs is
-stored inside the script itself, below `exit 0`, so it has to be able to read
-its own file — and it asks questions, which a pipe would answer with
-end-of-file. Downloading also leaves you a copy to read, to re-run, and to
-uninstall from. It refuses to run if that copy is not whole.
+It runs from a file rather than a pipe on purpose. Every config this installs
+is stored inside the script itself, below `exit 0`, so it has to be able to
+read its own file — and it asks questions, which a pipe would answer with
+end-of-file. The copy also stays behind, to read, to re-run, and to uninstall
+from. It refuses to run if that copy is not whole.
 
 Run the **exit** first: it prints a pairing token that the relay asks for.
 
@@ -111,7 +118,9 @@ undoing only what this script did.
 
 ### Upgrading
 
-Download the new file and run it. Before it touches anything it compares its
+Copy the new file over, the same way, and run it - or put it at
+`/root/doctor-dns.sh` and choose *update* in `smartdns-menu`. Before it
+touches anything it compares its
 own version against what the machine has, says which way it is going, and
 waits for an answer:
 
@@ -403,7 +412,7 @@ sudo smartdns del example.com
 What this cannot fix: names a service looks up itself without asking DNS -
 some mobile games do, and nothing shows in `smartdns-watch` for them - traffic
 that is neither HTTPS nor plain HTTP, and names that are `filtered in Iran`.
-When a set of names works, [open an issue](https://github.com/AmirhosseinAshouri/doctor-dns/issues)
+When a set of names works, [open an issue](https://github.com/AmirhosseinAshouri/doctor-dns-private/issues)
 with them, so they can go in the default list.
 
 **`smartdns-acl`** — who may use the relay, and what they have used. The panel
@@ -528,7 +537,7 @@ listens on no port: it only dials out to Telegram.
    are its admin, and a **🛠 مدیریت** button appears in its menu. A code works
    once, for 24 hours; the card makes a fresh one for each admin you add.
 4. In the bot, under **🛠 مدیریت**, create plans and set a card number, a
-   Zarinpal merchant ID, or both.
+   Zibal merchant ID, or both.
 
 Or over ssh:
 
@@ -546,7 +555,7 @@ sudo smartdns-bot off            # forget the token
 | **`/start`** | opens an account - pending, with nothing, like a web signup |
 | **🎁 تست رایگان** | one free 24-hour trial, once per Telegram account, offered until they buy anything |
 | **👤 حساب من** | status, plan, registered address, usage, allowance, speed, end date |
-| **🛒 خرید / تمدید** | pick a plan, then pay card to card (a photo of the receipt) or online through Zarinpal |
+| **🛒 خرید / تمدید** | pick a plan, then pay card to card (a photo of the receipt) or online through Zibal |
 | **🌐 ثبت آی‌پی** | a mini app that registers the address the phone is on, or type one in |
 | **📡 آدرس DNS** | the address to put in a console, phone or router |
 | **📶 پینگ بازی‌ها** | each game's ping from the Iranian server right now - green, yellow or red, fastest first |
@@ -590,7 +599,7 @@ Under **🛠 مدیریت**:
 - **Plans** - create, edit, stop selling, delete.
 - **Free trial** - its size, length and speed, or switch it off; and how many
   have taken one.
-- **Payment methods** - the card number and its holder, the Zarinpal merchant ID.
+- **Payment methods** - the card number and its holder, the Zibal merchant ID.
 - **Stats** - customers by status, receipts waiting, sales over 30 days, and each
   server's health.
 - **Pings** - each game's hosts as the relay last measured them: address, time,
@@ -603,7 +612,7 @@ Under **🛠 مدیریت**:
 ### The mini app and online payment
 
 Both are pages on the relay, because each needs something only the relay has:
-the customer's real address, and an Iranian server for Zarinpal to answer and
+the customer's real address, and an Iranian server for Zibal to answer and
 send the customer back to. So both need the relay to have a domain and a
 certificate, the same as its customer panel. The relay tells the exit where its
 pages are on every sync; until one with a domain has synced, the bot offers
@@ -611,10 +620,11 @@ only typing an address and paying card to card.
 
 - **The mini app** sees whatever address the phone is using. With a VPN on, that
   is the VPN's - the page says to turn it off first.
-- **Zarinpal** has to accept the relay's return address: register the relay's
+- **Zibal** has to accept the relay's return address: register the relay's
   domain, which the bot shows under payment methods, as your website in the
-  Zarinpal panel. A payment is confirmed with Zarinpal from the relay before
-  anything is recorded, and only against the order it was started for.
+  Zibal panel. A payment is confirmed with Zibal from the relay before
+  anything is recorded, only against the order it was started for, and only
+  for its full price. Prices are in toman; Zibal is asked for the same in rial.
 
 ## How it is built
 

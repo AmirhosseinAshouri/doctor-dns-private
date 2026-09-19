@@ -301,7 +301,7 @@ MIGRATIONS = [
     ("transactions", "receipt_type", "TEXT"),
     ("transactions", "note", "TEXT"),
     # What a payment was for, and how an online one is found again: the token
-    # in the link the bot hands out, and Zarinpal's own references for it.
+    # in the link the bot hands out, and Zibal's own track id for it.
     ("transactions", "plan_id", "INTEGER REFERENCES plans(id)"),
     ("transactions", "pay_token", "TEXT"),
     ("transactions", "authority", "TEXT"),
@@ -1595,7 +1595,7 @@ def settle_transactions(store):
     """Carry out payment decisions nobody has acted on yet.
 
     A receipt approved in the admin panel or the bot, or a payment the relay
-    has had Zarinpal confirm, is marked settled = 0; this applies its plan and
+    has had Zibal confirm, is marked settled = 0; this applies its plan and
     tells the customer. Both this process, after every sync, and smartdns-bot
     run it, so a decision takes effect within seconds when the bot is up and
     within a sync when it is not.
@@ -2251,10 +2251,10 @@ class API(http.server.BaseHTTPRequestHandler):
         return self.store.one(
             "SELECT t.*, p.name AS plan_name FROM transactions t"
             " LEFT JOIN plans p ON p.id = t.plan_id"
-            " WHERE t.pay_token = ? AND t.kind = 'zarinpal'", (token,))
+            " WHERE t.pay_token = ? AND t.kind = 'zibal'", (token,))
 
     def do_pay_order(self, body):
-        """What the relay needs to send a customer to Zarinpal, or why not."""
+        """What the relay needs to send a customer to Zibal, or why not."""
         t = self._order(body)
         if not t:
             return {"ok": False, "message": "این لینک پرداخت معتبر نیست"}
@@ -2271,7 +2271,7 @@ class API(http.server.BaseHTTPRequestHandler):
                 expired and not (body.get("returning") and t["authority"])):
             return {"ok": False, "message": "این لینک پرداخت منقضی شده؛ از ربات "
                                            "دوباره اقدام کنید"}
-        merchant = self.store.setting("zarinpal_merchant")
+        merchant = self.store.setting("zibal_merchant")
         if not merchant:
             return {"ok": False, "message": "پرداخت آنلاین الان فعال نیست"}
         return {"ok": True, "amount": int(t["amount"]), "merchant": merchant,
@@ -2282,19 +2282,20 @@ class API(http.server.BaseHTTPRequestHandler):
         t = self._order(body)
         authority = body.get("authority") or ""
         if (not t or t["status"] != "started"
-                or not re.fullmatch(r"[A-Za-z0-9]{8,64}", authority)):
+                or not re.fullmatch(r"\d{4,20}", authority)):
             return {"ok": False, "message": "این سفارش شروع نشد"}
         self.store.run("UPDATE transactions SET authority = ?"
                        " WHERE id = ? AND status = 'started'", (authority, t["id"]))
         return {"ok": True}
 
     def do_pay_verified(self, body):
-        """The relay has had Zarinpal confirm a payment: settle it.
+        """The relay has had Zibal confirm a payment, for the order's full
+        amount: settle it.
 
-        The authority must be the one recorded for this order when the customer
-        was sent to pay. Zarinpal verifies any authority it issued to this
-        merchant, so without this one real payment could be presented again
-        against a second order for the same amount.
+        The track id must be the one recorded for this order when the customer
+        was sent to pay. Zibal verifies any payment made to this merchant, so
+        without that check one real payment could be presented again against a
+        second order.
         """
         t = self._order(body)
         if not t:
@@ -2312,7 +2313,7 @@ class API(http.server.BaseHTTPRequestHandler):
             "UPDATE transactions SET status = 'approved', decided_at = ?,"
             " ref_id = ?, note = ?, settled = 0"
             " WHERE id = ? AND status = 'started'",
-            (now(), ref, ("zarinpal %s" % card).strip(), t["id"]))
+            (now(), ref, ("zibal %s" % card).strip(), t["id"]))
         if cur.rowcount == 1:
             settle_transactions(self.store)
             print("online payment: user %d, %d toman, ref %s"

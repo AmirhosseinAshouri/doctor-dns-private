@@ -509,8 +509,8 @@ esac
 # "#__END_ACL_SAVE_S" - passed the looser test this used to be, and went on to
 # install with twenty configs missing.
 [ "$(tail -n 1 "$SELF")" = "#__DOCTOR_DNS_COMPLETE__" ] || die "this file is incomplete - the
-    download stopped early. Fetch it again:
-        curl -fsSLO https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh"
+    copy stopped early. Copy doctor-dns.sh to this machine again, from the
+    releases of https://github.com/AmirhosseinAshouri/doctor-dns-private" 
 command -v apt-get >/dev/null 2>&1 || die "this installer expects Debian or Ubuntu"
 
 # ---------------------------------------------------------------- uninstall
@@ -713,7 +713,7 @@ if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$VERSION" ]; then
         warn "this file is OLDER than what is installed."
         warn "installing it will put old configs over new ones, and this"
         warn "script has no way to undo what a later version did."
-        warn "the newest is at github.com/AmirhosseinAshouri/doctor-dns/releases"
+        warn "the newest is in the releases of github.com/AmirhosseinAshouri/doctor-dns-private"
         answer=n
     else
         warn "this will upgrade this machine from $INSTALLED_VERSION to $VERSION."

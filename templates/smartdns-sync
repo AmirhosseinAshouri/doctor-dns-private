@@ -63,9 +63,9 @@ PANEL_TLS_PORT = 8443
 # past four megabytes, so there is no point carrying more than that up to it.
 MAX_RECEIPT = 4 * 1024 * 1024
 
-# Zarinpal, called from here rather than from the exit: an Iranian gateway
+# Zibal, called from here rather than from the exit: an Iranian gateway
 # answers an Iranian server, and the customer's browser has to come back to one.
-ZARINPAL = "https://payment.zarinpal.com/pg"
+ZIBAL = "https://gateway.zibal.ir"
 
 
 def load_config():
@@ -1500,7 +1500,7 @@ def human_fa(n):
 # ------------------------------------------------ telegram mini app, payment
 # The two pages the Telegram bot links customers to. They are served here, not
 # on the exit, because each needs what only this machine has: the customer's
-# real address for the mini app, and an Iranian server for Zarinpal.
+# real address for the mini app, and an Iranian server for Zibal.
 
 # Telegram hands a mini app its signed launch data in the URL's fragment. Its
 # own script reads it from there too, but that script lives on telegram.org,
@@ -1554,15 +1554,15 @@ def pay_page(ok, message, ref=""):
                 "<div class='big'>%s</div></div>" % html.escape(str(ref))) if ref else ""))
 
 
-def zarinpal(action, payload):
-    """Call Zarinpal's v4 payment API: its `data` object, or the reason it refused.
+def zibal(action, payload):
+    """Call Zibal's v1 payment API - "request" or "verify" - and return its answer.
 
-    A refusal comes back as a 4xx whose body says why, so that body is read
-    rather than thrown away with the status.
+    A refusal comes back with an HTTP error as often as with a result code, so
+    the body is read either way; an answer that is not JSON is an empty one.
+    Zibal counts in rial, which is its callers' business, not this function's.
     """
     req = urllib.request.Request(
-        "%s/v4/payment/%s.json" % (ZARINPAL, action),
-        data=json.dumps(payload).encode(),
+        "%s/v1/%s" % (ZIBAL, action), data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json", "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=20) as res:
@@ -1573,12 +1573,7 @@ def zarinpal(action, payload):
         answer = json.loads(raw or b"{}")
     except ValueError:
         answer = {}
-    if not isinstance(answer, dict):
-        return {}
-    if isinstance(answer.get("data"), dict) and answer["data"]:
-        return answer["data"]
-    errors = answer.get("errors") if isinstance(answer.get("errors"), dict) else {}
-    return {"code": errors.get("code"), "message": errors.get("message", "")}
+    return answer if isinstance(answer, dict) else {}
 
 
 class UserPanel(http.server.BaseHTTPRequestHandler):
@@ -1723,7 +1718,7 @@ class UserPanel(http.server.BaseHTTPRequestHandler):
         return self.send_html(pay_page(res.get("ok"), res.get("message")), frame=True)
 
     def pay_start(self, token):
-        """Open a Zarinpal payment for an order the bot created, and go there."""
+        """Open a Zibal payment for an order the bot created, and go there."""
         try:
             order = post("/pay-order", {"token": token})
         except Exception as e:
@@ -1734,38 +1729,40 @@ class UserPanel(http.server.BaseHTTPRequestHandler):
         back = "https://%s:%d/pay/back?t=%s" % (
             CFG["PANEL_DOMAIN"], PANEL_TLS_PORT, urllib.parse.quote(token))
         try:
-            res = zarinpal("request", {
-                "merchant_id": order["merchant"], "amount": int(order["amount"]),
-                "currency": "IRT", "callback_url": back,
+            # In rial: Zibal's unit. The service's prices are in toman.
+            res = zibal("request", {
+                "merchant": order["merchant"], "amount": int(order["amount"]) * 10,
+                "callbackUrl": back, "orderId": token,
                 "description": order.get("description") or "doctor dns"})
         except Exception as e:
-            log(ERROR, "panel: zarinpal unreachable: %s" % e)
+            log(ERROR, "panel: zibal unreachable: %s" % e)
             return self.send_html(pay_page(
                 False, "درگاه پرداخت در دسترس نیست؛ کمی بعد دوباره امتحان کنید"), 502)
-        authority = str(res.get("authority") or "")
-        if res.get("code") != 100 or not re.fullmatch(r"[A-Za-z0-9]{8,64}", authority):
-            log(WARN, "panel: zarinpal refused a payment request: %s %s"
-                % (res.get("code"), str(res.get("message") or "")[:160]))
+        track = str(res.get("trackId") or "")
+        if res.get("result") != 100 or not re.fullmatch(r"\d{4,20}", track):
+            log(WARN, "panel: zibal refused a payment request: %s %s"
+                % (res.get("result"), str(res.get("message") or "")[:160]))
             return self.send_html(pay_page(False, "درگاه پرداخت درخواست را نپذیرفت"), 502)
         try:
-            post("/pay-started", {"token": token, "authority": authority})
+            post("/pay-started", {"token": token, "authority": track})
         except Exception as e:
             log(ERROR, "panel: pay-started failed: %s" % e)
             return self.send_html(pay_page(False, "الان نشد، چند دقیقه دیگر"), 502)
-        return self.send("", 303, {"Location": "%s/StartPay/%s" % (ZARINPAL, authority)})
+        return self.send("", 303, {"Location": "%s/start/%s" % (ZIBAL, track)})
 
     def pay_back(self):
-        """Where Zarinpal sends the customer back.
+        """Where Zibal sends the customer back.
 
-        Nothing in the query is believed except which order it is: the payment
-        is confirmed with Zarinpal itself before the exit hears of it. Opening
-        this page again is safe - Zarinpal answers 101 for a payment already
-        verified, and the exit records an order once.
+        Nothing in the query is believed except which order and which payment
+        it names: the payment is confirmed with Zibal itself, and its amount
+        checked against the order's, before the exit hears of it. Opening this
+        page again is safe - Zibal answers 201 for a payment already verified,
+        and the exit records an order once.
         """
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         token = (q.get("t") or [""])[0]
-        authority = (q.get("Authority") or [""])[0]
-        if (q.get("Status") or [""])[0] != "OK":
+        track = (q.get("trackId") or [""])[0]
+        if (q.get("success") or [""])[0] != "1":
             return self.send_html(pay_page(
                 False, "پرداخت انجام نشد یا لغو شد. اگر خواستید، دوباره از ربات اقدام کنید."))
         try:
@@ -1776,28 +1773,42 @@ class UserPanel(http.server.BaseHTTPRequestHandler):
                 False, "الان نشد. همین صفحه را چند دقیقه بعد دوباره باز کنید."), 502)
         if not order.get("ok"):
             return self.send_html(pay_page(bool(order.get("paid")), order.get("message")))
-        if not authority or not hmac.compare_digest(order.get("authority") or "", authority):
+        if not re.fullmatch(r"\d{4,20}", track) or not hmac.compare_digest(
+                order.get("authority") or "", track):
             return self.send_html(pay_page(False, "این پرداخت با سفارش جور نیست"))
         try:
-            res = zarinpal("verify", {"merchant_id": order["merchant"],
-                                      "amount": int(order["amount"]),
-                                      "authority": authority})
+            res = zibal("verify", {"merchant": order["merchant"], "trackId": int(track)})
         except Exception as e:
-            log(ERROR, "panel: zarinpal verify unreachable: %s" % e)
+            log(ERROR, "panel: zibal verify unreachable: %s" % e)
             return self.send_html(pay_page(
                 False, "تأیید پرداخت الان نشد. همین صفحه را چند دقیقه بعد دوباره باز کنید."), 502)
-        if res.get("code") not in (100, 101):
-            log(WARN, "panel: zarinpal did not verify a payment: %s %s"
-                % (res.get("code"), str(res.get("message") or "")[:160]))
+        result = res.get("result")
+        paid = (result == 100 and res.get("status", 1) == 1) or result == 201
+        if not paid:
+            log(WARN, "panel: zibal did not verify a payment: %s %s"
+                % (result, str(res.get("message") or "")[:160]))
             return self.send_html(pay_page(
                 False, "پرداخت تأیید نشد. اگر مبلغی از حسابتان کم شده، درگاه آن را برمی‌گرداند."))
-        ref = str(res.get("ref_id") or "")
+        # Zibal's verify takes no amount, so this is the one place a payment of
+        # less than the order would show: the amount it reports, in rial,
+        # against the order's price in toman.
+        expected = int(order["amount"]) * 10
         try:
-            done = post("/pay-verified", {"token": token, "authority": authority,
-                                          "ref_id": ref, "card_pan": res.get("card_pan") or ""})
+            amount = int(res["amount"]) if res.get("amount") is not None else expected
+        except (TypeError, ValueError):
+            amount = -1
+        if amount != expected:
+            log(ERROR, "panel: zibal payment %s is for %s rial, the order is %d - not recorded"
+                % (track, res.get("amount"), expected))
+            return self.send_html(pay_page(
+                False, "مبلغ پرداخت‌شده با سفارش جور نیست؛ با پشتیبانی تماس بگیرید."))
+        ref = str(res.get("refNumber") or "")
+        try:
+            done = post("/pay-verified", {"token": token, "authority": track, "ref_id": ref,
+                                          "card_pan": str(res.get("cardNumber") or "")})
         except Exception as e:
             # Paid and confirmed, not yet recorded. Opening this page again
-            # verifies once more and records it then.
+            # verifies once more - Zibal answers 201 - and records it then.
             log(ERROR, "panel: pay-verified failed for a confirmed payment (ref %s): %s"
                 % (ref, e))
             return self.send_html(pay_page(

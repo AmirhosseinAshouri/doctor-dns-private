@@ -509,8 +509,8 @@ esac
 # "#__END_ACL_SAVE_S" - passed the looser test this used to be, and went on to
 # install with twenty configs missing.
 [ "$(tail -n 1 "$SELF")" = "#__DOCTOR_DNS_COMPLETE__" ] || die "this file is incomplete - the
-    download stopped early. Fetch it again:
-        curl -fsSLO https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh"
+    copy stopped early. Copy doctor-dns.sh to this machine again, from the
+    releases of https://github.com/AmirhosseinAshouri/doctor-dns-private" 
 command -v apt-get >/dev/null 2>&1 || die "this installer expects Debian or Ubuntu"
 
 # ---------------------------------------------------------------- uninstall
@@ -713,7 +713,7 @@ if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$VERSION" ]; then
         warn "this file is OLDER than what is installed."
         warn "installing it will put old configs over new ones, and this"
         warn "script has no way to undo what a later version did."
-        warn "the newest is at github.com/AmirhosseinAshouri/doctor-dns/releases"
+        warn "the newest is in the releases of github.com/AmirhosseinAshouri/doctor-dns-private"
         answer=n
     else
         warn "this will upgrade this machine from $INSTALLED_VERSION to $VERSION."
@@ -3628,7 +3628,7 @@ exit 0
 #    ("transactions", "receipt_type", "TEXT"),
 #    ("transactions", "note", "TEXT"),
 #    # What a payment was for, and how an online one is found again: the token
-#    # in the link the bot hands out, and Zarinpal's own references for it.
+#    # in the link the bot hands out, and Zibal's own track id for it.
 #    ("transactions", "plan_id", "INTEGER REFERENCES plans(id)"),
 #    ("transactions", "pay_token", "TEXT"),
 #    ("transactions", "authority", "TEXT"),
@@ -4922,7 +4922,7 @@ exit 0
 #    """Carry out payment decisions nobody has acted on yet.
 #
 #    A receipt approved in the admin panel or the bot, or a payment the relay
-#    has had Zarinpal confirm, is marked settled = 0; this applies its plan and
+#    has had Zibal confirm, is marked settled = 0; this applies its plan and
 #    tells the customer. Both this process, after every sync, and smartdns-bot
 #    run it, so a decision takes effect within seconds when the bot is up and
 #    within a sync when it is not.
@@ -5578,10 +5578,10 @@ exit 0
 #        return self.store.one(
 #            "SELECT t.*, p.name AS plan_name FROM transactions t"
 #            " LEFT JOIN plans p ON p.id = t.plan_id"
-#            " WHERE t.pay_token = ? AND t.kind = 'zarinpal'", (token,))
+#            " WHERE t.pay_token = ? AND t.kind = 'zibal'", (token,))
 #
 #    def do_pay_order(self, body):
-#        """What the relay needs to send a customer to Zarinpal, or why not."""
+#        """What the relay needs to send a customer to Zibal, or why not."""
 #        t = self._order(body)
 #        if not t:
 #            return {"ok": False, "message": "این لینک پرداخت معتبر نیست"}
@@ -5598,7 +5598,7 @@ exit 0
 #                expired and not (body.get("returning") and t["authority"])):
 #            return {"ok": False, "message": "این لینک پرداخت منقضی شده؛ از ربات "
 #                                           "دوباره اقدام کنید"}
-#        merchant = self.store.setting("zarinpal_merchant")
+#        merchant = self.store.setting("zibal_merchant")
 #        if not merchant:
 #            return {"ok": False, "message": "پرداخت آنلاین الان فعال نیست"}
 #        return {"ok": True, "amount": int(t["amount"]), "merchant": merchant,
@@ -5609,19 +5609,20 @@ exit 0
 #        t = self._order(body)
 #        authority = body.get("authority") or ""
 #        if (not t or t["status"] != "started"
-#                or not re.fullmatch(r"[A-Za-z0-9]{8,64}", authority)):
+#                or not re.fullmatch(r"\d{4,20}", authority)):
 #            return {"ok": False, "message": "این سفارش شروع نشد"}
 #        self.store.run("UPDATE transactions SET authority = ?"
 #                       " WHERE id = ? AND status = 'started'", (authority, t["id"]))
 #        return {"ok": True}
 #
 #    def do_pay_verified(self, body):
-#        """The relay has had Zarinpal confirm a payment: settle it.
+#        """The relay has had Zibal confirm a payment, for the order's full
+#        amount: settle it.
 #
-#        The authority must be the one recorded for this order when the customer
-#        was sent to pay. Zarinpal verifies any authority it issued to this
-#        merchant, so without this one real payment could be presented again
-#        against a second order for the same amount.
+#        The track id must be the one recorded for this order when the customer
+#        was sent to pay. Zibal verifies any payment made to this merchant, so
+#        without that check one real payment could be presented again against a
+#        second order.
 #        """
 #        t = self._order(body)
 #        if not t:
@@ -5639,7 +5640,7 @@ exit 0
 #            "UPDATE transactions SET status = 'approved', decided_at = ?,"
 #            " ref_id = ?, note = ?, settled = 0"
 #            " WHERE id = ? AND status = 'started'",
-#            (now(), ref, ("zarinpal %s" % card).strip(), t["id"]))
+#            (now(), ref, ("zibal %s" % card).strip(), t["id"]))
 #        if cur.rowcount == 1:
 #            settle_transactions(self.store)
 #            print("online payment: user %d, %d toman, ref %s"
@@ -5812,9 +5813,9 @@ exit 0
 ## past four megabytes, so there is no point carrying more than that up to it.
 #MAX_RECEIPT = 4 * 1024 * 1024
 #
-## Zarinpal, called from here rather than from the exit: an Iranian gateway
+## Zibal, called from here rather than from the exit: an Iranian gateway
 ## answers an Iranian server, and the customer's browser has to come back to one.
-#ZARINPAL = "https://payment.zarinpal.com/pg"
+#ZIBAL = "https://gateway.zibal.ir"
 #
 #
 #def load_config():
@@ -7249,7 +7250,7 @@ exit 0
 ## ------------------------------------------------ telegram mini app, payment
 ## The two pages the Telegram bot links customers to. They are served here, not
 ## on the exit, because each needs what only this machine has: the customer's
-## real address for the mini app, and an Iranian server for Zarinpal.
+## real address for the mini app, and an Iranian server for Zibal.
 #
 ## Telegram hands a mini app its signed launch data in the URL's fragment. Its
 ## own script reads it from there too, but that script lives on telegram.org,
@@ -7303,15 +7304,15 @@ exit 0
 #                "<div class='big'>%s</div></div>" % html.escape(str(ref))) if ref else ""))
 #
 #
-#def zarinpal(action, payload):
-#    """Call Zarinpal's v4 payment API: its `data` object, or the reason it refused.
+#def zibal(action, payload):
+#    """Call Zibal's v1 payment API - "request" or "verify" - and return its answer.
 #
-#    A refusal comes back as a 4xx whose body says why, so that body is read
-#    rather than thrown away with the status.
+#    A refusal comes back with an HTTP error as often as with a result code, so
+#    the body is read either way; an answer that is not JSON is an empty one.
+#    Zibal counts in rial, which is its callers' business, not this function's.
 #    """
 #    req = urllib.request.Request(
-#        "%s/v4/payment/%s.json" % (ZARINPAL, action),
-#        data=json.dumps(payload).encode(),
+#        "%s/v1/%s" % (ZIBAL, action), data=json.dumps(payload).encode(),
 #        headers={"Content-Type": "application/json", "Accept": "application/json"})
 #    try:
 #        with urllib.request.urlopen(req, timeout=20) as res:
@@ -7322,12 +7323,7 @@ exit 0
 #        answer = json.loads(raw or b"{}")
 #    except ValueError:
 #        answer = {}
-#    if not isinstance(answer, dict):
-#        return {}
-#    if isinstance(answer.get("data"), dict) and answer["data"]:
-#        return answer["data"]
-#    errors = answer.get("errors") if isinstance(answer.get("errors"), dict) else {}
-#    return {"code": errors.get("code"), "message": errors.get("message", "")}
+#    return answer if isinstance(answer, dict) else {}
 #
 #
 #class UserPanel(http.server.BaseHTTPRequestHandler):
@@ -7472,7 +7468,7 @@ exit 0
 #        return self.send_html(pay_page(res.get("ok"), res.get("message")), frame=True)
 #
 #    def pay_start(self, token):
-#        """Open a Zarinpal payment for an order the bot created, and go there."""
+#        """Open a Zibal payment for an order the bot created, and go there."""
 #        try:
 #            order = post("/pay-order", {"token": token})
 #        except Exception as e:
@@ -7483,38 +7479,40 @@ exit 0
 #        back = "https://%s:%d/pay/back?t=%s" % (
 #            CFG["PANEL_DOMAIN"], PANEL_TLS_PORT, urllib.parse.quote(token))
 #        try:
-#            res = zarinpal("request", {
-#                "merchant_id": order["merchant"], "amount": int(order["amount"]),
-#                "currency": "IRT", "callback_url": back,
+#            # In rial: Zibal's unit. The service's prices are in toman.
+#            res = zibal("request", {
+#                "merchant": order["merchant"], "amount": int(order["amount"]) * 10,
+#                "callbackUrl": back, "orderId": token,
 #                "description": order.get("description") or "doctor dns"})
 #        except Exception as e:
-#            log(ERROR, "panel: zarinpal unreachable: %s" % e)
+#            log(ERROR, "panel: zibal unreachable: %s" % e)
 #            return self.send_html(pay_page(
 #                False, "درگاه پرداخت در دسترس نیست؛ کمی بعد دوباره امتحان کنید"), 502)
-#        authority = str(res.get("authority") or "")
-#        if res.get("code") != 100 or not re.fullmatch(r"[A-Za-z0-9]{8,64}", authority):
-#            log(WARN, "panel: zarinpal refused a payment request: %s %s"
-#                % (res.get("code"), str(res.get("message") or "")[:160]))
+#        track = str(res.get("trackId") or "")
+#        if res.get("result") != 100 or not re.fullmatch(r"\d{4,20}", track):
+#            log(WARN, "panel: zibal refused a payment request: %s %s"
+#                % (res.get("result"), str(res.get("message") or "")[:160]))
 #            return self.send_html(pay_page(False, "درگاه پرداخت درخواست را نپذیرفت"), 502)
 #        try:
-#            post("/pay-started", {"token": token, "authority": authority})
+#            post("/pay-started", {"token": token, "authority": track})
 #        except Exception as e:
 #            log(ERROR, "panel: pay-started failed: %s" % e)
 #            return self.send_html(pay_page(False, "الان نشد، چند دقیقه دیگر"), 502)
-#        return self.send("", 303, {"Location": "%s/StartPay/%s" % (ZARINPAL, authority)})
+#        return self.send("", 303, {"Location": "%s/start/%s" % (ZIBAL, track)})
 #
 #    def pay_back(self):
-#        """Where Zarinpal sends the customer back.
+#        """Where Zibal sends the customer back.
 #
-#        Nothing in the query is believed except which order it is: the payment
-#        is confirmed with Zarinpal itself before the exit hears of it. Opening
-#        this page again is safe - Zarinpal answers 101 for a payment already
-#        verified, and the exit records an order once.
+#        Nothing in the query is believed except which order and which payment
+#        it names: the payment is confirmed with Zibal itself, and its amount
+#        checked against the order's, before the exit hears of it. Opening this
+#        page again is safe - Zibal answers 201 for a payment already verified,
+#        and the exit records an order once.
 #        """
 #        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 #        token = (q.get("t") or [""])[0]
-#        authority = (q.get("Authority") or [""])[0]
-#        if (q.get("Status") or [""])[0] != "OK":
+#        track = (q.get("trackId") or [""])[0]
+#        if (q.get("success") or [""])[0] != "1":
 #            return self.send_html(pay_page(
 #                False, "پرداخت انجام نشد یا لغو شد. اگر خواستید، دوباره از ربات اقدام کنید."))
 #        try:
@@ -7525,28 +7523,42 @@ exit 0
 #                False, "الان نشد. همین صفحه را چند دقیقه بعد دوباره باز کنید."), 502)
 #        if not order.get("ok"):
 #            return self.send_html(pay_page(bool(order.get("paid")), order.get("message")))
-#        if not authority or not hmac.compare_digest(order.get("authority") or "", authority):
+#        if not re.fullmatch(r"\d{4,20}", track) or not hmac.compare_digest(
+#                order.get("authority") or "", track):
 #            return self.send_html(pay_page(False, "این پرداخت با سفارش جور نیست"))
 #        try:
-#            res = zarinpal("verify", {"merchant_id": order["merchant"],
-#                                      "amount": int(order["amount"]),
-#                                      "authority": authority})
+#            res = zibal("verify", {"merchant": order["merchant"], "trackId": int(track)})
 #        except Exception as e:
-#            log(ERROR, "panel: zarinpal verify unreachable: %s" % e)
+#            log(ERROR, "panel: zibal verify unreachable: %s" % e)
 #            return self.send_html(pay_page(
 #                False, "تأیید پرداخت الان نشد. همین صفحه را چند دقیقه بعد دوباره باز کنید."), 502)
-#        if res.get("code") not in (100, 101):
-#            log(WARN, "panel: zarinpal did not verify a payment: %s %s"
-#                % (res.get("code"), str(res.get("message") or "")[:160]))
+#        result = res.get("result")
+#        paid = (result == 100 and res.get("status", 1) == 1) or result == 201
+#        if not paid:
+#            log(WARN, "panel: zibal did not verify a payment: %s %s"
+#                % (result, str(res.get("message") or "")[:160]))
 #            return self.send_html(pay_page(
 #                False, "پرداخت تأیید نشد. اگر مبلغی از حسابتان کم شده، درگاه آن را برمی‌گرداند."))
-#        ref = str(res.get("ref_id") or "")
+#        # Zibal's verify takes no amount, so this is the one place a payment of
+#        # less than the order would show: the amount it reports, in rial,
+#        # against the order's price in toman.
+#        expected = int(order["amount"]) * 10
 #        try:
-#            done = post("/pay-verified", {"token": token, "authority": authority,
-#                                          "ref_id": ref, "card_pan": res.get("card_pan") or ""})
+#            amount = int(res["amount"]) if res.get("amount") is not None else expected
+#        except (TypeError, ValueError):
+#            amount = -1
+#        if amount != expected:
+#            log(ERROR, "panel: zibal payment %s is for %s rial, the order is %d - not recorded"
+#                % (track, res.get("amount"), expected))
+#            return self.send_html(pay_page(
+#                False, "مبلغ پرداخت‌شده با سفارش جور نیست؛ با پشتیبانی تماس بگیرید."))
+#        ref = str(res.get("refNumber") or "")
+#        try:
+#            done = post("/pay-verified", {"token": token, "authority": track, "ref_id": ref,
+#                                          "card_pan": str(res.get("cardNumber") or "")})
 #        except Exception as e:
 #            # Paid and confirmed, not yet recorded. Opening this page again
-#            # verifies once more and records it then.
+#            # verifies once more - Zibal answers 201 - and records it then.
 #            log(ERROR, "panel: pay-verified failed for a confirmed payment (ref %s): %s"
 #                % (ref, e))
 #            return self.send_html(pay_page(
@@ -9964,7 +9976,7 @@ exit 0
 #
 #def bot_card():
 #    """The Telegram bot: its token, the code that makes somebody its admin,
-#    and who already is. Plans, the card number and Zarinpal are set inside
+#    and who already is. Plans, the card number and Zibal are set inside
 #    the bot itself, where the operator who sells is."""
 #    p = CFG["ADMIN_PATH"]
 #    token = setting("bot_token")
@@ -10008,7 +10020,7 @@ exit 0
 #                   " style='margin-top:14px' onsubmit='return confirm(\"ربات قطع شود؟\")'>"
 #                   "<input type='hidden' name='clear' value='1'>"
 #                   "<button class='danger'>قطع ربات</button></form>" % p)
-#    out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زرین‌پال از داخل خود "
+#    out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زیبال از داخل خود "
 #               "ربات، در منوی «🛠 مدیریت»، تنظیم می‌شوند.</p></div>")
 #    return "".join(out)
 #
@@ -10098,7 +10110,7 @@ exit 0
 #
 #Two things a customer starts in the bot finish on a relay, because they have
 #to: the mini app that registers an address (only the relay sees the customer's
-#real one) and online payment (Zarinpal wants an Iranian server, and the
+#real one) and online payment (Zibal wants an Iranian server, and the
 #customer's browser has to come back to one). The relay reports where its pages
 #are on every sync, and the bot links there.
 #
@@ -10664,8 +10676,8 @@ exit 0
 #        rows = []
 #        if self.setting("card_number"):
 #            rows.append([btn("💳 کارت به کارت", "card:%d" % plan_id)])
-#        if self.setting("zarinpal_merchant") and self.setting("relay_panel"):
-#            rows.append([btn("🔐 پرداخت آنلاین (زرین‌پال)", "zp:%d" % plan_id)])
+#        if self.setting("zibal_merchant") and self.setting("relay_panel"):
+#            rows.append([btn("🔐 پرداخت آنلاین (زیبال)", "zp:%d" % plan_id)])
 #        if not rows:
 #            return self.say(chat, "هنوز روش پرداختی تنظیم نشده. لطفاً با پشتیبانی تماس بگیرید.")
 #        self.say(chat, "پلن انتخابی:\n%s\n\nروش پرداخت را انتخاب کنید:"
@@ -10686,12 +10698,12 @@ exit 0
 #    def online(self, chat, user, plan_id):
 #        plan = self.store.one("SELECT * FROM plans WHERE id = ? AND active = 1", (plan_id,))
 #        base = self.setting("relay_panel")
-#        if not plan or not base or not self.setting("zarinpal_merchant"):
+#        if not plan or not base or not self.setting("zibal_merchant"):
 #            return self.say(chat, "پرداخت آنلاین الان در دسترس نیست.")
 #        token = secrets.token_urlsafe(24)
 #        self.store.run(
 #            "INSERT INTO transactions (user_id, amount, kind, plan_id, status,"
-#            " created_at, pay_token, note) VALUES (?, ?, 'zarinpal', ?, 'started', ?, ?,"
+#            " created_at, pay_token, note) VALUES (?, ?, 'zibal', ?, 'started', ?, ?,"
 #            " 'telegram')", (user["id"], int(plan["price"]), plan["id"], P.now(), token))
 #        self.say(chat, "پلن: %s\nمبلغ: %s\n\nبرای پرداخت روی دکمه بزنید. لینک تا ۲۴ ساعت "
 #                       "معتبر است؛ بعد از پرداخت، پلن خودکار فعال می‌شود و همین‌جا خبرتان "
@@ -11019,13 +11031,13 @@ exit 0
 #            return self.ask(chat, ("admin-card",), "شمارهٔ کارت و نام صاحب کارت را این‌طور "
 #                                                   "بفرستید:\n6037 9912 3456 7890 | علی رضایی")
 #        if cmd == "pz":
-#            return self.ask(chat, ("admin-merchant",), "مرچنت کد ۳۶ نویسه‌ای زرین‌پال را بفرستید:")
+#            return self.ask(chat, ("admin-merchant",), "مرچنت کد زیبال را بفرستید:")
 #        if cmd == "pcx":
 #            self.store.set_setting("card_number", "")
 #            self.store.set_setting("card_holder", "")
 #            return self.admin_payments(chat)
 #        if cmd == "pzx":
-#            self.store.set_setting("zarinpal_merchant", "")
+#            self.store.set_setting("zibal_merchant", "")
 #            return self.admin_payments(chat)
 #        if cmd == "bc":
 #            return self.ask(chat, ("admin-bc",), "متن پیام همگانی را بفرستید:")
@@ -11133,12 +11145,11 @@ exit 0
 #            return self.admin_payments(chat)
 #        if kind == "admin-merchant":
 #            merchant = text.strip()
-#            if not re.fullmatch(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", merchant):
-#                return self.say(chat, "مرچنت کد زرین‌پال ۳۶ نویسه است، مثل "
-#                                      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx. دوباره بفرستید:",
-#                                cancel_kb())
+#            if not re.fullmatch(r"[A-Za-z0-9-]{4,64}", merchant):
+#                return self.say(chat, "مرچنت کد زیبال را همان‌طور که پنل زیبال نشان می‌دهد "
+#                                      "بفرستید — فقط حروف انگلیسی و عدد:", cancel_kb())
 #            self.state.pop(chat, None)
-#            self.store.set_setting("zarinpal_merchant", merchant)
+#            self.store.set_setting("zibal_merchant", merchant)
 #            self.say(chat, "✅ مرچنت ذخیره شد.")
 #            return self.admin_payments(chat)
 #        if kind in ("admin-bc", "admin-bc-confirm"):
@@ -11411,19 +11422,19 @@ exit 0
 #    # payments
 #    def admin_payments(self, chat):
 #        card, holder = self.setting("card_number"), self.setting("card_holder")
-#        merchant, panel = self.setting("zarinpal_merchant"), self.setting("relay_panel")
+#        merchant, panel = self.setting("zibal_merchant"), self.setting("relay_panel")
 #        lines = ["💳 روش‌های پرداخت", "",
 #                 "کارت به کارت: %s" % ((format_card(card) + (" — " + holder if holder else ""))
 #                                       if card else "تنظیم نشده"),
-#                 "زرین‌پال: %s" % (("مرچنت " + merchant[:8] + "…") if merchant else "تنظیم نشده")]
+#                 "زیبال: %s" % (("مرچنت " + merchant[:8] + "…") if merchant else "تنظیم نشده")]
 #        if merchant and not panel:
 #            lines.append("\n⚠️ پرداخت آنلاین از روی رله انجام می‌شود و هنوز رله‌ای با دامنه "
 #                         "و گواهی همگام نشده؛ تا آن وقت دکمهٔ پرداخت آنلاین به مشتری نشان "
 #                         "داده نمی‌شود.")
 #        elif panel:
-#            lines.append("\nدامنهٔ رله برای ثبت در پنل زرین‌پال: %s" % panel)
+#            lines.append("\nدامنهٔ رله برای ثبت در پنل زیبال: %s" % panel)
 #        self.say(chat, "\n".join(lines), kb(
-#            [btn("💳 شمارهٔ کارت", "a:pc"), btn("🔐 مرچنت زرین‌پال", "a:pz")],
+#            [btn("💳 شمارهٔ کارت", "a:pc"), btn("🔐 مرچنت زیبال", "a:pz")],
 #            [btn("حذف کارت", "a:pcx"), btn("حذف مرچنت", "a:pzx")]))
 #
 #    # stats
@@ -13045,7 +13056,7 @@ exit 0
 ## somewhere else; nothing else sets them.
 #ETC="${SMARTDNS_ETC:-/etc/smart-dns}"
 #VERSION_FILE="${SMARTDNS_VERSION_FILE:-/var/lib/smart-dns/version}"
-#REPO="https://github.com/AmirhosseinAshouri/doctor-dns"
+#REPO="https://github.com/AmirhosseinAshouri/doctor-dns-private"
 #
 #B=$'\e[1m'; D=$'\e[2m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
 #[ -t 1 ] || { B=; D=; G=; Y=; N=; }
@@ -13137,34 +13148,34 @@ exit 0
 #            run bash "$f" "$@"; return 0
 #        fi
 #    done
+#    # The code is in a private repository, so nothing is fetched from here:
+#    # the operator copies the file in, from their own computer.
 #    echo "  there is no copy of the installer for $VERSION on this machine."
-#    sure "download it from GitHub (v$VERSION) and run it?" || return 0
-#    f="$(mktemp)"
-#    if ! curl -fsSL -m 120 -o "$f" "$REPO/releases/download/v$VERSION/doctor-dns.sh"; then
-#        echo "  the download failed - fetch doctor-dns.sh v$VERSION yourself and run it with $*"
-#        rm -f "$f"; pause; return 0
-#    fi
-#    run bash "$f" "$@"
-#    rm -f "$f"
+#    echo "  copy doctor-dns.sh v$VERSION from $REPO/releases to /root/ -"
+#    echo "      scp doctor-dns.sh root@THIS-SERVER:/root/"
+#    echo "  and choose this again."
+#    pause
 #}
 #
+## The code is in a private repository, so this machine cannot fetch a new
+## version: the operator copies it in, and this runs the copy it finds.
 #update() {
-#    local f latest
-#    f="$(mktemp)"
-#    printf '\n  fetching the latest installer...\n'
-#    if ! curl -fsSL -m 120 -o "$f" "https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh"; then
-#        echo "  the download failed"; rm -f "$f"; pause; return 0
+#    local f=/root/doctor-dns.sh latest
+#    if [ ! -f "$f" ]; then
+#        printf '\n  There is no new copy here to update from. Download doctor-dns.sh from\n'
+#        printf '  %s/releases on your own computer, copy it in -\n\n' "$REPO"
+#        printf '      scp doctor-dns.sh root@THIS-SERVER:/root/\n\n'
+#        printf '  and choose this again.\n'
+#        pause; return 0
 #    fi
 #    latest="$(bash "$f" --version 2>/dev/null || echo '?')"
-#    printf '  installed: %s    latest: %s\n' "$VERSION" "$latest"
+#    printf '  installed: %s    the copy in /root: %s\n' "$VERSION" "$latest"
 #    if [ "$latest" = "$VERSION" ]; then
-#        sure "the same version - run it anyway, to check and repair?" || { rm -f "$f"; return 0; }
+#        sure "the same version - run it anyway, to check and repair?" || return 0
 #    else
-#        sure "upgrade this $role to $latest?" || { rm -f "$f"; return 0; }
+#        sure "run it on this $role, $VERSION -> $latest?" || return 0
 #    fi
-#    cp "$f" /root/doctor-dns.sh 2>/dev/null || true
 #    run bash "$f"
-#    rm -f "$f"
 #}
 #
 #uninstall() {
@@ -13247,7 +13258,7 @@ exit 0
 #menu_install() {
 #    choose "Installation" \
 #        "the version installed here: $VERSION   (doctor-dns.sh --version)|printf '\n  %s\n' \"\$VERSION\"; pause" \
-#        'update to the latest version|update' \
+#        'update from a new copy in /root|update' \
 #        'get or renew a certificate   (smartdns-cert)|ask "domain" && run smartdns-cert "$REPLY"' \
 #        'remove doctor dns from this machine   (doctor-dns.sh --uninstall)|uninstall'
 #}

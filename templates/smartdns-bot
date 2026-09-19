@@ -15,7 +15,7 @@ process made the decision, and delivered from here.
 
 Two things a customer starts in the bot finish on a relay, because they have
 to: the mini app that registers an address (only the relay sees the customer's
-real one) and online payment (Zarinpal wants an Iranian server, and the
+real one) and online payment (Zibal wants an Iranian server, and the
 customer's browser has to come back to one). The relay reports where its pages
 are on every sync, and the bot links there.
 
@@ -581,8 +581,8 @@ class Bot:
         rows = []
         if self.setting("card_number"):
             rows.append([btn("💳 کارت به کارت", "card:%d" % plan_id)])
-        if self.setting("zarinpal_merchant") and self.setting("relay_panel"):
-            rows.append([btn("🔐 پرداخت آنلاین (زرین‌پال)", "zp:%d" % plan_id)])
+        if self.setting("zibal_merchant") and self.setting("relay_panel"):
+            rows.append([btn("🔐 پرداخت آنلاین (زیبال)", "zp:%d" % plan_id)])
         if not rows:
             return self.say(chat, "هنوز روش پرداختی تنظیم نشده. لطفاً با پشتیبانی تماس بگیرید.")
         self.say(chat, "پلن انتخابی:\n%s\n\nروش پرداخت را انتخاب کنید:"
@@ -603,12 +603,12 @@ class Bot:
     def online(self, chat, user, plan_id):
         plan = self.store.one("SELECT * FROM plans WHERE id = ? AND active = 1", (plan_id,))
         base = self.setting("relay_panel")
-        if not plan or not base or not self.setting("zarinpal_merchant"):
+        if not plan or not base or not self.setting("zibal_merchant"):
             return self.say(chat, "پرداخت آنلاین الان در دسترس نیست.")
         token = secrets.token_urlsafe(24)
         self.store.run(
             "INSERT INTO transactions (user_id, amount, kind, plan_id, status,"
-            " created_at, pay_token, note) VALUES (?, ?, 'zarinpal', ?, 'started', ?, ?,"
+            " created_at, pay_token, note) VALUES (?, ?, 'zibal', ?, 'started', ?, ?,"
             " 'telegram')", (user["id"], int(plan["price"]), plan["id"], P.now(), token))
         self.say(chat, "پلن: %s\nمبلغ: %s\n\nبرای پرداخت روی دکمه بزنید. لینک تا ۲۴ ساعت "
                        "معتبر است؛ بعد از پرداخت، پلن خودکار فعال می‌شود و همین‌جا خبرتان "
@@ -936,13 +936,13 @@ class Bot:
             return self.ask(chat, ("admin-card",), "شمارهٔ کارت و نام صاحب کارت را این‌طور "
                                                    "بفرستید:\n6037 9912 3456 7890 | علی رضایی")
         if cmd == "pz":
-            return self.ask(chat, ("admin-merchant",), "مرچنت کد ۳۶ نویسه‌ای زرین‌پال را بفرستید:")
+            return self.ask(chat, ("admin-merchant",), "مرچنت کد زیبال را بفرستید:")
         if cmd == "pcx":
             self.store.set_setting("card_number", "")
             self.store.set_setting("card_holder", "")
             return self.admin_payments(chat)
         if cmd == "pzx":
-            self.store.set_setting("zarinpal_merchant", "")
+            self.store.set_setting("zibal_merchant", "")
             return self.admin_payments(chat)
         if cmd == "bc":
             return self.ask(chat, ("admin-bc",), "متن پیام همگانی را بفرستید:")
@@ -1050,12 +1050,11 @@ class Bot:
             return self.admin_payments(chat)
         if kind == "admin-merchant":
             merchant = text.strip()
-            if not re.fullmatch(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", merchant):
-                return self.say(chat, "مرچنت کد زرین‌پال ۳۶ نویسه است، مثل "
-                                      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx. دوباره بفرستید:",
-                                cancel_kb())
+            if not re.fullmatch(r"[A-Za-z0-9-]{4,64}", merchant):
+                return self.say(chat, "مرچنت کد زیبال را همان‌طور که پنل زیبال نشان می‌دهد "
+                                      "بفرستید — فقط حروف انگلیسی و عدد:", cancel_kb())
             self.state.pop(chat, None)
-            self.store.set_setting("zarinpal_merchant", merchant)
+            self.store.set_setting("zibal_merchant", merchant)
             self.say(chat, "✅ مرچنت ذخیره شد.")
             return self.admin_payments(chat)
         if kind in ("admin-bc", "admin-bc-confirm"):
@@ -1328,19 +1327,19 @@ class Bot:
     # payments
     def admin_payments(self, chat):
         card, holder = self.setting("card_number"), self.setting("card_holder")
-        merchant, panel = self.setting("zarinpal_merchant"), self.setting("relay_panel")
+        merchant, panel = self.setting("zibal_merchant"), self.setting("relay_panel")
         lines = ["💳 روش‌های پرداخت", "",
                  "کارت به کارت: %s" % ((format_card(card) + (" — " + holder if holder else ""))
                                        if card else "تنظیم نشده"),
-                 "زرین‌پال: %s" % (("مرچنت " + merchant[:8] + "…") if merchant else "تنظیم نشده")]
+                 "زیبال: %s" % (("مرچنت " + merchant[:8] + "…") if merchant else "تنظیم نشده")]
         if merchant and not panel:
             lines.append("\n⚠️ پرداخت آنلاین از روی رله انجام می‌شود و هنوز رله‌ای با دامنه "
                          "و گواهی همگام نشده؛ تا آن وقت دکمهٔ پرداخت آنلاین به مشتری نشان "
                          "داده نمی‌شود.")
         elif panel:
-            lines.append("\nدامنهٔ رله برای ثبت در پنل زرین‌پال: %s" % panel)
+            lines.append("\nدامنهٔ رله برای ثبت در پنل زیبال: %s" % panel)
         self.say(chat, "\n".join(lines), kb(
-            [btn("💳 شمارهٔ کارت", "a:pc"), btn("🔐 مرچنت زرین‌پال", "a:pz")],
+            [btn("💳 شمارهٔ کارت", "a:pc"), btn("🔐 مرچنت زیبال", "a:pz")],
             [btn("حذف کارت", "a:pcx"), btn("حذف مرچنت", "a:pzx")]))
 
     # stats
