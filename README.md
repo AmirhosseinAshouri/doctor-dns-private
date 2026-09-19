@@ -59,7 +59,7 @@ certificate naming no console host at all.
 | **Speed limits** | a per-customer download cap, shaped with htb + fq_codel rather than by dropping packets |
 | **Service templates** | which brands a customer's plan routes, down to individual domains; a few groups ship visible but unticked, because routing them breaks the thing they belong to |
 | **Customer panel** | sign up, register an address, see usage, send a payment receipt |
-| **Telegram bot** | the customer panel in Telegram, plus buying a plan - card to card or Zarinpal - and the operator's receipts, customers, plans and broadcasts |
+| **Telegram bot** | the customer panel in Telegram, plus buying a plan - card to card or Zibal - and the operator's receipts, customers, plans and broadcasts |
 | **Operator panel** | customers, templates, domains, host monitoring, backup and restore |
 | **TLS** | certificates obtained and renewed automatically, asking for nothing but a domain name |
 
@@ -537,7 +537,7 @@ listens on no port: it only dials out to Telegram.
    are its admin, and a **🛠 مدیریت** button appears in its menu. A code works
    once, for 24 hours; the card makes a fresh one for each admin you add.
 4. In the bot, under **🛠 مدیریت**, create plans and set a card number, a
-   Zarinpal merchant ID, or both.
+   Zibal merchant ID, or both.
 
 Or over ssh:
 
@@ -555,7 +555,7 @@ sudo smartdns-bot off            # forget the token
 | **`/start`** | opens an account - pending, with nothing, like a web signup |
 | **🎁 تست رایگان** | one free 24-hour trial, once per Telegram account, offered until they buy anything |
 | **👤 حساب من** | status, plan, registered address, usage, allowance, speed, end date |
-| **🛒 خرید / تمدید** | pick a plan, then pay card to card (a photo of the receipt) or online through Zarinpal |
+| **🛒 خرید / تمدید** | pick a plan, then pay card to card (a photo of the receipt) or online through Zibal |
 | **🌐 ثبت آی‌پی** | a mini app that registers the address the phone is on, or type one in |
 | **📡 آدرس DNS** | the address to put in a console, phone or router |
 | **📶 پینگ بازی‌ها** | each game's ping from the Iranian server right now - green, yellow or red, fastest first |
@@ -599,7 +599,7 @@ Under **🛠 مدیریت**:
 - **Plans** - create, edit, stop selling, delete.
 - **Free trial** - its size, length and speed, or switch it off; and how many
   have taken one.
-- **Payment methods** - the card number and its holder, the Zarinpal merchant ID.
+- **Payment methods** - the card number and its holder, the Zibal merchant ID.
 - **Stats** - customers by status, receipts waiting, sales over 30 days, and each
   server's health.
 - **Pings** - each game's hosts as the relay last measured them: address, time,
@@ -612,7 +612,7 @@ Under **🛠 مدیریت**:
 ### The mini app and online payment
 
 Both are pages on the relay, because each needs something only the relay has:
-the customer's real address, and an Iranian server for Zarinpal to answer and
+the customer's real address, and an Iranian server for Zibal to answer and
 send the customer back to. So both need the relay to have a domain and a
 certificate, the same as its customer panel. The relay tells the exit where its
 pages are on every sync; until one with a domain has synced, the bot offers
@@ -620,10 +620,11 @@ only typing an address and paying card to card.
 
 - **The mini app** sees whatever address the phone is using. With a VPN on, that
   is the VPN's - the page says to turn it off first.
-- **Zarinpal** has to accept the relay's return address: register the relay's
+- **Zibal** has to accept the relay's return address: register the relay's
   domain, which the bot shows under payment methods, as your website in the
-  Zarinpal panel. A payment is confirmed with Zarinpal from the relay before
-  anything is recorded, and only against the order it was started for.
+  Zibal panel. A payment is confirmed with Zibal from the relay before
+  anything is recorded, only against the order it was started for, and only
+  for its full price. Prices are in toman; Zibal is asked for the same in rial.
 
 ## How it is built
 

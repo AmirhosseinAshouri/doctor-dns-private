@@ -1858,7 +1858,7 @@ def tell(user_id, text):
 
 def bot_card():
     """The Telegram bot: its token, the code that makes somebody its admin,
-    and who already is. Plans, the card number and Zarinpal are set inside
+    and who already is. Plans, the card number and Zibal are set inside
     the bot itself, where the operator who sells is."""
     p = CFG["ADMIN_PATH"]
     token = setting("bot_token")
@@ -1902,7 +1902,7 @@ def bot_card():
                    " style='margin-top:14px' onsubmit='return confirm(\"ربات قطع شود؟\")'>"
                    "<input type='hidden' name='clear' value='1'>"
                    "<button class='danger'>قطع ربات</button></form>" % p)
-    out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زرین‌پال از داخل خود "
+    out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زیبال از داخل خود "
                "ربات، در منوی «🛠 مدیریت»، تنظیم می‌شوند.</p></div>")
     return "".join(out)
 

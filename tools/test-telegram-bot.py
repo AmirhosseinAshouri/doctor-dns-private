@@ -2,7 +2,7 @@
 """The Telegram bot, the mini app and online payment, offline.
 
 A fake Telegram records what the bot sends and serves what it downloads, the
-database is a throwaway, and Zarinpal and the exit's API are stood in for on the
+database is a throwaway, and Zibal and the exit's API are stood in for on the
 relay's side. What is checked is the decisions: who gets an account and who
 gets the admin menu, what a plan does to an account, that a receipt reaches the
 admins and an approval applies its plan once, that a mini app's launch data has
@@ -213,7 +213,7 @@ check("with its holder", store.setting("card_holder") == "علی رضایی")
 press(CUSTOMER, "plan:%d" % pid)
 labels = [x["text"] for x in buttons(last(CUSTOMER))]
 check("card to card is offered", any("کارت" in l for l in labels))
-check("online payment is not, with no merchant and no relay", not any("زرین" in l for l in labels))
+check("online payment is not, with no merchant and no relay", not any("زیبال" in l for l in labels))
 press(CUSTOMER, "card:%d" % pid)
 check("the card number is shown, grouped", "6037 9912 3456 7890" in last(CUSTOMER).get("text", ""))
 check("with the price", "150,000" in last(CUSTOMER).get("text", ""))
@@ -396,44 +396,47 @@ check("the address is escaped", "&lt;i&gt;" in sync.tg_page("<i>"))
 print("paying online")
 press(CUSTOMER, "zp:%d" % pid)
 check("with no merchant, no order is opened",
-      store.one("SELECT count(*) c FROM transactions WHERE kind = 'zarinpal'")["c"] == 0)
+      store.one("SELECT count(*) c FROM transactions WHERE kind = 'zibal'")["c"] == 0)
 press(ADMIN, "a:pz")
-update(ADMIN, "not-a-merchant")
-check("a malformed merchant is refused", store.setting("zarinpal_merchant") == "")
-MERCHANT = "1344b5d4-0048-11e8-94db-005056a205be"
+update(ADMIN, "not a merchant!")
+check("a malformed merchant is refused", store.setting("zibal_merchant") == "")
+MERCHANT = "6b1a3c9e0f2d4a5b8c7d9e10"
 update(ADMIN, MERCHANT)
-check("a real one is saved", store.setting("zarinpal_merchant") == MERCHANT)
+check("a real one is saved", store.setting("zibal_merchant") == MERCHANT)
 press(CUSTOMER, "plan:%d" % pid)
-check("online payment is offered now", any("زرین" in x["text"] for x in buttons(last(CUSTOMER))))
+check("online payment is offered now", any("زیبال" in x["text"] for x in buttons(last(CUSTOMER))))
 press(CUSTOMER, "zp:%d" % pid)
-order = store.one("SELECT * FROM transactions WHERE kind = 'zarinpal'")
+order = store.one("SELECT * FROM transactions WHERE kind = 'zibal'")
 links = [x for x in buttons(last(CUSTOMER)) if x.get("url")]
 check("an order is opened", order is not None and order["status"] == "started")
 check("and the customer gets a link to the relay", bool(links) and order is not None and
       links[0]["url"] == "https://relay.example.com:8443/pay/" + order["pay_token"])
 token = order["pay_token"]
 res = api.do_pay_order({"token": token})
-check("the relay is told what to charge", res.get("ok") and res["amount"] == 150000 and res["merchant"] == MERCHANT)
+check("the relay is told what to charge, in toman",
+      res.get("ok") and res["amount"] == 150000 and res["merchant"] == MERCHANT)
 check("a made-up token gets nothing", not api.do_pay_order({"token": "x" * 32}).get("ok"))
-AUTH = "A0000000000000000000000000000wwOGYpd"
-check("the gateway's authority is recorded", api.do_pay_started({"token": token, "authority": AUTH}).get("ok"))
-res = api.do_pay_verified({"token": token, "authority": "A000000000000000000000000000other1", "ref_id": "1"})
-check("another order's authority does not pay for this one", not res.get("ok") and
+TRACK = "3714661258"
+check("the gateway's track id is recorded", api.do_pay_started({"token": token, "authority": TRACK}).get("ok"))
+check("one that is not a number is not",
+      not api.do_pay_started({"token": token, "authority": "A0000abc"}).get("ok"))
+res = api.do_pay_verified({"token": token, "authority": "3714661259", "ref_id": "1"})
+check("another payment's track id does not pay for this one", not res.get("ok") and
       store.one("SELECT status FROM transactions WHERE id = ?", (order["id"],))["status"] == "started")
-res = api.do_pay_verified({"token": token, "authority": AUTH, "ref_id": "201", "card_pan": "6037**1234"})
+res = api.do_pay_verified({"token": token, "authority": TRACK, "ref_id": "201", "card_pan": "6037**1234"})
 order = store.one("SELECT * FROM transactions WHERE id = ?", (order["id"],))
 check("the right one settles the order", res.get("ok") and order["status"] == "approved" and order["ref_id"] == "201")
 check("and applies the plan", user_of(CUSTOMER)["status"] == "active" and user_of(CUSTOMER)["used_bytes"] == 0)
 check("the admins hear of it", any("پرداخت آنلاین" in x for x in outbox(ADMIN)))
 told = len(outbox(CUSTOMER))
-check("recording it again is harmless", api.do_pay_verified({"token": token, "authority": AUTH}).get("ok")
+check("recording it again is harmless", api.do_pay_verified({"token": token, "authority": TRACK}).get("ok")
       and len(outbox(CUSTOMER)) == told)
 check("and a paid link cannot be paid again", api.do_pay_order({"token": token}).get("paid"))
 old = "old" + "x" * 29
 store.run("INSERT INTO transactions (user_id, amount, kind, plan_id, status, created_at, pay_token)"
-          " VALUES (?, 150000, 'zarinpal', ?, 'started', '2000-01-01T00:00:00+00:00', ?)", (cid, pid, old))
+          " VALUES (?, 150000, 'zibal', ?, 'started', '2000-01-01T00:00:00+00:00', ?)", (cid, pid, old))
 check("an expired link is refused", not api.do_pay_order({"token": old}).get("ok"))
-store.run("UPDATE transactions SET authority = ? WHERE pay_token = ?", ("Aold000000000000000000000000000000", old))
+store.run("UPDATE transactions SET authority = ? WHERE pay_token = ?", ("1111111111", old))
 check("but somebody coming back from the gateway with it is let in",
       api.do_pay_order({"token": old, "returning": True}).get("ok"))
 
@@ -443,17 +446,19 @@ routes = {"/pay-order": api.do_pay_order, "/pay-started": api.do_pay_started,
           "/pay-verified": api.do_pay_verified, "/tg-claim": api.do_tg_claim}
 sync.post = lambda path, payload: routes[path](payload)
 zp = []
-answers = {"request": {"code": 100, "authority": "A00000000000000000000000000000fresh"},
-           "verify": {"code": 100, "ref_id": 777, "card_pan": "6037**9999"}}
-real_zarinpal = sync.zarinpal
+PAID = {"result": 100, "status": 1, "amount": 1500000, "refNumber": 777,
+        "cardNumber": "6037**9999", "message": "success"}
+answers = {"request": {"result": 100, "trackId": 3714669999, "message": "success"},
+           "verify": dict(PAID)}
+real_zibal = sync.zibal
 
 
-def fake_zarinpal(action, payload):
+def fake_zibal(action, payload):
     zp.append((action, payload))
     return dict(answers[action])
 
 
-sync.zarinpal = fake_zarinpal
+sync.zibal = fake_zibal
 
 
 def relay(method, path, body=b"", ip="5.200.1.2"):
@@ -469,35 +474,67 @@ def relay(method, path, body=b"", ip="5.200.1.2"):
     return head, page
 
 
+def newest_order():
+    return store.one("SELECT pay_token FROM transactions WHERE kind = 'zibal' AND status = 'started'"
+                     " AND created_at > '2001' ORDER BY id DESC")["pay_token"]
+
+
 press(CUSTOMER, "zp:%d" % pid)
-token2 = store.one("SELECT pay_token FROM transactions WHERE kind = 'zarinpal' AND status = 'started'"
-                   " AND created_at > '2001' ORDER BY id DESC")["pay_token"]
+token2 = newest_order()
 logged = io.StringIO()
 with contextlib.redirect_stdout(logged):
     head, page = relay("GET", "/pay/" + token2)
-check("the relay sends the customer to Zarinpal", head.startswith("HTTP/1.1 303") and
-      "Location: https://payment.zarinpal.com/pg/StartPay/A00000000000000000000000000000fresh" in head, head)
-check("for the plan's price, in toman", zp[-1][1]["amount"] == 150000 and zp[-1][1]["currency"] == "IRT")
-check("with its way back through this relay",
-      zp[-1][1]["callback_url"].startswith("https://relay.example.com:8443/pay/back?t="))
+check("the relay sends the customer to Zibal", head.startswith("HTTP/1.1 303") and
+      "Location: https://gateway.zibal.ir/start/3714669999" in head, head)
+check("asking for the plan's price in rial - Zibal's unit", zp[-1][1]["amount"] == 1500000)
+check("with this merchant", zp[-1][1]["merchant"] == MERCHANT)
+check("and its way back through this relay",
+      zp[-1][1]["callbackUrl"].startswith("https://relay.example.com:8443/pay/back?t="))
 check("and the link's token never reaches the log", token2 not in logged.getvalue(), logged.getvalue())
-fresh = "A00000000000000000000000000000fresh"
-state = lambda: store.one("SELECT status FROM transactions WHERE pay_token = ?", (token2,))["status"]
-relay("GET", "/pay/back?t=%s&Authority=%s&Status=NOK" % (token2, fresh))
+fresh = "3714669999"
+state = lambda t=None: store.one("SELECT status FROM transactions WHERE pay_token = ?",
+                                 (t or token2,))["status"]
+back = lambda t, track, ok="1": relay("GET", "/pay/back?t=%s&success=%s&trackId=%s&status=%s"
+                                      % (t, ok, track, "2" if ok == "1" else "3"))
+back(token2, fresh, ok="0")
 check("a cancelled payment records nothing", state() == "started")
 calls = len(zp)
-relay("GET", "/pay/back?t=%s&Authority=%s&Status=OK" % (token2, "Aforged00000000000000000000000000"))
-check("a forged authority is not even verified", state() == "started" and len(zp) == calls)
-answers["verify"] = {"code": -51, "message": "Session is not valid, session is not active paid try."}
-relay("GET", "/pay/back?t=%s&Authority=%s&Status=OK" % (token2, fresh))
-check("an unpaid one that Zarinpal does not verify records nothing", state() == "started")
-answers["verify"] = {"code": 100, "ref_id": 777, "card_pan": "6037**9999"}
-head, page = relay("GET", "/pay/back?t=%s&Authority=%s&Status=OK" % (token2, fresh))
-check("a paid one is verified with Zarinpal", zp[-1][0] == "verify" and zp[-1][1]["authority"] == fresh)
+back(token2, "3714660000")
+check("a forged track id is not even verified", state() == "started" and len(zp) == calls)
+answers["verify"] = {"result": 202, "message": "order not paid"}
+back(token2, fresh)
+check("an unpaid one that Zibal does not verify records nothing", state() == "started")
+answers["verify"] = dict(PAID, amount=150000)
+head, page = back(token2, fresh)
+check("a payment of less than the price is not recorded", state() == "started" and "مبلغ" in page, page[-300:])
+answers["verify"] = dict(PAID)
+head, page = back(token2, fresh)
+check("a paid one is verified with Zibal", zp[-1][0] == "verify"
+      and zp[-1][1] == {"merchant": MERCHANT, "trackId": 3714669999})
 check("and settles the order", state() == "approved")
 check("the page shows the reference", "777" in page)
-head, page = relay("GET", "/pay/back?t=%s&Authority=%s&Status=OK" % (token2, fresh))
+answers["verify"] = {"result": 201, "message": "already verified"}
+head, page = back(token2, fresh)
 check("coming back to the page again is harmless", state() == "approved" and "✅" in page)
+
+press(CUSTOMER, "zp:%d" % pid)
+token3 = newest_order()
+relay("GET", "/pay/" + token3)
+answers["verify"] = dict(PAID)
+
+
+def pay_verified_fails(payload):
+    raise OSError("the exit is not answering")
+
+
+routes["/pay-verified"] = pay_verified_fails
+head, page = back(token3, fresh)
+check("a confirmed payment the exit could not record is not lost",
+      state(token3) == "started" and "دوباره باز کنید" in page)
+routes["/pay-verified"] = api.do_pay_verified
+answers["verify"] = {"result": 201, "message": "already verified"}
+head, page = back(token3, fresh)
+check("reopening the page records it, on Zibal's 'already verified'", state(token3) == "approved")
 head, page = relay("GET", "/tg", ip="5.201.0.1")
 check("the mini app shows the address it was opened from", "5.201.0.1" in page)
 check("and may be framed by Telegram's web client", "frame-ancestors" in head and "X-Frame-Options" not in head)
@@ -679,7 +716,7 @@ check("an admin can be removed", not b.is_admin(ADMIN))
 admin.Admin.action(form, "bot-token", {"clear": ["1"]})
 check("and the bot switched off", store.setting("bot_token") == "")
 
-print("talking to Telegram and Zarinpal over HTTP")
+print("talking to Telegram and Zibal over HTTP")
 
 
 class FakeHTTP(http.server.BaseHTTPRequestHandler):
@@ -699,12 +736,12 @@ class FakeHTTP(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         FakeHTTP.seen.append((self.path, dict(self.headers), body))
-        if self.path.endswith("/v4/payment/request.json"):
+        if self.path.endswith("/v1/request"):
             if json.loads(body).get("amount", 0) < 1000:
-                return self.reply(400, {"data": [], "errors": {
-                    "code": -9, "message": "The input params invalid, validation error."}})
-            return self.reply(200, {"data": {"code": 100, "message": "Success",
-                                             "authority": AUTH}, "errors": []})
+                return self.reply(200, {"result": 105, "message": "amount must be larger than 1000"})
+            return self.reply(200, {"result": 100, "trackId": 3714661258, "message": "success"})
+        if self.path.endswith("/v1/verify"):
+            return self.reply(400, {"result": 102, "message": "merchant not found"})
         if self.path.endswith("/getFile"):
             return self.reply(200, {"ok": True, "result": {"file_path": "photos/1.jpg", "file_size": 3}})
         if self.path.endswith("/sendMessage") and b'"chat_id": 403' in body:
@@ -745,9 +782,14 @@ try:
 except bot.TelegramError as e:
     big = e.code == "too_big"
 check("unless it is over the limit", big)
-sync.ZARINPAL = base + "/pg"
-check("zarinpal: the data object when it accepts", real_zarinpal("request", {"amount": 150000}).get("authority") == AUTH)
-check("zarinpal: its reason when it refuses", real_zarinpal("request", {"amount": 10}).get("code") == -9)
+sync.ZIBAL = base
+check("zibal: its answer when it accepts",
+      real_zibal("request", {"amount": 1500000}).get("trackId") == 3714661258)
+check("zibal: its reason when it refuses", real_zibal("request", {"amount": 10}).get("result") == 105)
+check("zibal: the body of an HTTP error is still read", real_zibal("verify", {"trackId": 1}).get("result") == 102)
+path, headers, body = FakeHTTP.seen[-1]
+check("zibal: the v1 endpoints, as JSON", path == "/v1/verify"
+      and headers.get("Content-Type") == "application/json")
 srv.shutdown()
 
 print("installed with the exit")
