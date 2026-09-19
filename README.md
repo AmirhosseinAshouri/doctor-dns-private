@@ -16,7 +16,7 @@ in one install script with no dependencies beyond what Debian ships.
 
 They are worth more than anything else right now. If something breaks, or a
 service you expected to work does not,
-[open an issue](https://github.com/AmirhosseinAshouri/doctor-dns/issues) — say which
+[open an issue](https://github.com/AmirhosseinAshouri/doctor-dns-private/issues) — say which
 side it was, what you ran, and what happened. A report of one console failing
 one download is a genuinely useful thing; most of what is in here was learnt
 exactly that way.
@@ -93,15 +93,22 @@ address after the ISP has changed it:
 One script, run once on each machine. It asks which side it is on and the
 address of the other.
 
+This repository is private, so the servers never fetch anything from it:
+nothing on them has - or needs - a way in. Download `doctor-dns.sh` from the
+[releases](https://github.com/AmirhosseinAshouri/doctor-dns-private/releases) on your own computer, signed in, and copy it to each
+machine:
+
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh && sudo bash doctor-dns.sh
+gh release download -R AmirhosseinAshouri/doctor-dns-private -p doctor-dns.sh
+scp doctor-dns.sh root@SERVER:
+ssh -t root@SERVER 'bash doctor-dns.sh'
 ```
 
-It downloads rather than pipes on purpose. Every config this installs is
-stored inside the script itself, below `exit 0`, so it has to be able to read
-its own file — and it asks questions, which a pipe would answer with
-end-of-file. Downloading also leaves you a copy to read, to re-run, and to
-uninstall from. It refuses to run if that copy is not whole.
+It runs from a file rather than a pipe on purpose. Every config this installs
+is stored inside the script itself, below `exit 0`, so it has to be able to
+read its own file — and it asks questions, which a pipe would answer with
+end-of-file. The copy also stays behind, to read, to re-run, and to uninstall
+from. It refuses to run if that copy is not whole.
 
 Run the **exit** first: it prints a pairing token that the relay asks for.
 
@@ -111,7 +118,9 @@ undoing only what this script did.
 
 ### Upgrading
 
-Download the new file and run it. Before it touches anything it compares its
+Copy the new file over, the same way, and run it - or put it at
+`/root/doctor-dns.sh` and choose *update* in `smartdns-menu`. Before it
+touches anything it compares its
 own version against what the machine has, says which way it is going, and
 waits for an answer:
 
@@ -403,7 +412,7 @@ sudo smartdns del example.com
 What this cannot fix: names a service looks up itself without asking DNS -
 some mobile games do, and nothing shows in `smartdns-watch` for them - traffic
 that is neither HTTPS nor plain HTTP, and names that are `filtered in Iran`.
-When a set of names works, [open an issue](https://github.com/AmirhosseinAshouri/doctor-dns/issues)
+When a set of names works, [open an issue](https://github.com/AmirhosseinAshouri/doctor-dns-private/issues)
 with them, so they can go in the default list.
 
 **`smartdns-acl`** — who may use the relay, and what they have used. The panel

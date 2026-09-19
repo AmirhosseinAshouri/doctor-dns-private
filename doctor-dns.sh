@@ -509,8 +509,8 @@ esac
 # "#__END_ACL_SAVE_S" - passed the looser test this used to be, and went on to
 # install with twenty configs missing.
 [ "$(tail -n 1 "$SELF")" = "#__DOCTOR_DNS_COMPLETE__" ] || die "this file is incomplete - the
-    download stopped early. Fetch it again:
-        curl -fsSLO https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh"
+    copy stopped early. Copy doctor-dns.sh to this machine again, from the
+    releases of https://github.com/AmirhosseinAshouri/doctor-dns-private" 
 command -v apt-get >/dev/null 2>&1 || die "this installer expects Debian or Ubuntu"
 
 # ---------------------------------------------------------------- uninstall
@@ -713,7 +713,7 @@ if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$VERSION" ]; then
         warn "this file is OLDER than what is installed."
         warn "installing it will put old configs over new ones, and this"
         warn "script has no way to undo what a later version did."
-        warn "the newest is at github.com/AmirhosseinAshouri/doctor-dns/releases"
+        warn "the newest is in the releases of github.com/AmirhosseinAshouri/doctor-dns-private"
         answer=n
     else
         warn "this will upgrade this machine from $INSTALLED_VERSION to $VERSION."
@@ -13045,7 +13045,7 @@ exit 0
 ## somewhere else; nothing else sets them.
 #ETC="${SMARTDNS_ETC:-/etc/smart-dns}"
 #VERSION_FILE="${SMARTDNS_VERSION_FILE:-/var/lib/smart-dns/version}"
-#REPO="https://github.com/AmirhosseinAshouri/doctor-dns"
+#REPO="https://github.com/AmirhosseinAshouri/doctor-dns-private"
 #
 #B=$'\e[1m'; D=$'\e[2m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
 #[ -t 1 ] || { B=; D=; G=; Y=; N=; }
@@ -13137,34 +13137,34 @@ exit 0
 #            run bash "$f" "$@"; return 0
 #        fi
 #    done
+#    # The code is in a private repository, so nothing is fetched from here:
+#    # the operator copies the file in, from their own computer.
 #    echo "  there is no copy of the installer for $VERSION on this machine."
-#    sure "download it from GitHub (v$VERSION) and run it?" || return 0
-#    f="$(mktemp)"
-#    if ! curl -fsSL -m 120 -o "$f" "$REPO/releases/download/v$VERSION/doctor-dns.sh"; then
-#        echo "  the download failed - fetch doctor-dns.sh v$VERSION yourself and run it with $*"
-#        rm -f "$f"; pause; return 0
-#    fi
-#    run bash "$f" "$@"
-#    rm -f "$f"
+#    echo "  copy doctor-dns.sh v$VERSION from $REPO/releases to /root/ -"
+#    echo "      scp doctor-dns.sh root@THIS-SERVER:/root/"
+#    echo "  and choose this again."
+#    pause
 #}
 #
+## The code is in a private repository, so this machine cannot fetch a new
+## version: the operator copies it in, and this runs the copy it finds.
 #update() {
-#    local f latest
-#    f="$(mktemp)"
-#    printf '\n  fetching the latest installer...\n'
-#    if ! curl -fsSL -m 120 -o "$f" "https://raw.githubusercontent.com/AmirhosseinAshouri/doctor-dns/main/doctor-dns.sh"; then
-#        echo "  the download failed"; rm -f "$f"; pause; return 0
+#    local f=/root/doctor-dns.sh latest
+#    if [ ! -f "$f" ]; then
+#        printf '\n  There is no new copy here to update from. Download doctor-dns.sh from\n'
+#        printf '  %s/releases on your own computer, copy it in -\n\n' "$REPO"
+#        printf '      scp doctor-dns.sh root@THIS-SERVER:/root/\n\n'
+#        printf '  and choose this again.\n'
+#        pause; return 0
 #    fi
 #    latest="$(bash "$f" --version 2>/dev/null || echo '?')"
-#    printf '  installed: %s    latest: %s\n' "$VERSION" "$latest"
+#    printf '  installed: %s    the copy in /root: %s\n' "$VERSION" "$latest"
 #    if [ "$latest" = "$VERSION" ]; then
-#        sure "the same version - run it anyway, to check and repair?" || { rm -f "$f"; return 0; }
+#        sure "the same version - run it anyway, to check and repair?" || return 0
 #    else
-#        sure "upgrade this $role to $latest?" || { rm -f "$f"; return 0; }
+#        sure "run it on this $role, $VERSION -> $latest?" || return 0
 #    fi
-#    cp "$f" /root/doctor-dns.sh 2>/dev/null || true
 #    run bash "$f"
-#    rm -f "$f"
 #}
 #
 #uninstall() {
@@ -13247,7 +13247,7 @@ exit 0
 #menu_install() {
 #    choose "Installation" \
 #        "the version installed here: $VERSION   (doctor-dns.sh --version)|printf '\n  %s\n' \"\$VERSION\"; pause" \
-#        'update to the latest version|update' \
+#        'update from a new copy in /root|update' \
 #        'get or renew a certificate   (smartdns-cert)|ask "domain" && run smartdns-cert "$REPLY"' \
 #        'remove doctor dns from this machine   (doctor-dns.sh --uninstall)|uninstall'
 #}
