@@ -216,6 +216,7 @@ tunnel_port_problem() {
         "$TUNNEL_LOCAL_HTTPS"|"$TUNNEL_LOCAL_HTTP") echo "the tunnel's own end on the relay" ;;
     esac
     { [ "$p" -ge 5300 ] && [ "$p" -le 5399 ]; } && echo "the templates' resolvers on the relay"
+    { [ "$p" -ge 18500 ] && [ "$p" -le 18599 ]; } && echo "the relay's ends of the extra exits' tunnels"
     admin="$(sed -n 's/^ADMIN_PORT=//p' /etc/smart-dns/admin.env 2>/dev/null | head -1 || true)"
     [ -n "$admin" ] && [ "$p" = "$admin" ] && echo "the admin panel"
     return 0
@@ -237,6 +238,47 @@ parse_tunnel_spec() {
 # Both ends derive the tunnel's token from the secret they already share, so
 # there is nothing new to copy between them.
 tunnel_token() { printf 'doctor-dns-tunnel:%s' "$1" | sha256sum | cut -c1-48; }
+
+# An extra exit's tunnel. Shorter than the pair's: the relay always dials an
+# extra exit, so there is no direction to choose and no port to open on the
+# relay - only what to speak, and on which port this machine listens.
+ask_exit_tunnel() {
+    local a t i=0 why
+    printf '\n%sTunnel between the relay and this exit%s (optional)\n\n' "$B" "$N"
+    printf '  Plain TCP is the fastest path and shows the name of every site on the\n'
+    printf '  way. A tunnel hides them, which some routes into Iran need.\n\n'
+    printf '  1) no tunnel - plain TCP\n'
+    printf '  2) BackPack tunnel\n\n'
+    read -r -p "  choice [1/2] [1]: " a
+    case "${a:-1}" in
+        2|backpack|tunnel) ;;
+        *) TUNNEL=off; return 0 ;;
+    esac
+    TUNNEL=backpack
+    TUNNEL_DIRECTION=direct
+    printf '\n  Which transport? stealth is encrypted and looks like random bytes;\n'
+    printf '  wss looks like an ordinary HTTPS site; tcp and ws are not encrypted,\n'
+    printf '  so the names still show. Try one or two - it depends on the route.\n\n'
+    for t in $TUNNEL_DIRECT_TRANSPORTS; do
+        i=$((i + 1)); printf '  %d) %s\n' "$i" "$t"
+    done
+    printf '\n'
+    read -r -p "  choice [1]: " a
+    i=0
+    TUNNEL_TRANSPORT=stealth
+    for t in $TUNNEL_DIRECT_TRANSPORTS; do
+        i=$((i + 1)); [ "${a:-1}" = "$i" ] && TUNNEL_TRANSPORT="$t"
+    done
+    while :; do
+        printf '\n'
+        read -r -p "  port the relay dials on this machine [8444]: " a
+        a="${a:-8444}"
+        why="$(tunnel_port_problem "$a")"
+        [ -z "$why" ] && { TUNNEL_PORT="$a"; break; }
+        warn "port $a cannot carry the tunnel: $why"
+    done
+    info "open port $TUNNEL_PORT to the relay in this machine's firewall, if it has one"
+}
 
 ask_tunnel() {
     local a list="" i=0 t note
@@ -542,6 +584,11 @@ uninstall() {
 
     step "Stopping services"
     local svc
+    # The per-exit tunnels are started by the sync agent, not by this script,
+    # so they are not on the list below.
+    for svc in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+        systemctl disable --now "$svc" >/dev/null 2>&1 || true
+    done
     for svc in $(recall services-enabled); do
         systemctl stop "$svc" 2>/dev/null || true
         systemctl disable "$svc" >/dev/null 2>&1 || true
@@ -901,7 +948,6 @@ env_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1 || true; }
 # --tunnel: ask again on a machine that is already set up. The exit shows the
 # menu with what it has now as the defaults; the relay asks for the exit's new
 # pairing token, which carries the answer.
-# An extra exit has no tunnel: that runs between a relay and its main exit.
 if [ -n "${ASK_TUNNEL:-}" ] && [ -z "$TUNNEL" ] && [ "$ROLE" != extra ]; then
     if [ "$ROLE" = exit ]; then
         CUR_TUNNEL="$(env_get /etc/smart-dns/panel.env TUNNEL)"
@@ -940,6 +986,20 @@ if [ -z "$TUNNEL" ]; then
 fi
 if [ "$ROLE" = exit ] && [ -z "$TUNNEL" ] && [ -z "${ASSUME_YES:-}" ] && [ -z "$UPGRADE" ]; then
     ask_tunnel
+fi
+# An extra exit keeps its own: the relay learns it from the line printed at the
+# end of this run, which the operator pastes into the bot with the exit.
+if [ "$ROLE" = extra ]; then
+    if [ -z "$TUNNEL" ] && [ -f /etc/smart-dns/exit.env ]; then
+        TUNNEL="$(env_get /etc/smart-dns/exit.env TUNNEL)"
+        TUNNEL_TRANSPORT="${TUNNEL_TRANSPORT:-$(env_get /etc/smart-dns/exit.env TUNNEL_TRANSPORT)}"
+        TUNNEL_PORT="${TUNNEL_PORT:-$(env_get /etc/smart-dns/exit.env TUNNEL_PORT)}"
+        TUNNEL_SECRET="${TUNNEL_SECRET:-$(env_get /etc/smart-dns/exit.env TUNNEL_SECRET)}"
+    fi
+    if [ -z "$TUNNEL" ] && [ -z "${ASSUME_YES:-}" ] && [ -z "$UPGRADE" ]; then
+        ask_exit_tunnel
+    fi
+    [ "${TUNNEL:-off}" = backpack ] && TUNNEL_DIRECTION=direct
 fi
 case "${TUNNEL:-off}" in
     off|no|direct|"") TUNNEL=off ;;
@@ -986,6 +1046,7 @@ DNSMASQ_CHANGED=0
 # certificate, and the install died on its very last line - after doing all of
 # its work, and before recording that it had.
 ADMIN_URL_OUT=""
+EXIT_TUNNEL_OUT=""
 ADMIN_PASS_OUT=""
 SYNC_TOKEN_OUT=""
 USER_PANEL_OUT=""
@@ -1699,6 +1760,74 @@ if [ "$ROLE" = extra ]; then
     printf 'RELAY_IP=%s\nSELF_IP=%s\n' "$PEER_IP" "$SELF_IP" > /etc/smart-dns/exit.env
     umask 022
     info "carries traffic for $PEER_IP and nobody else"
+
+    # Its own tunnel, when it was asked for. The relay dials this machine, so
+    # this end listens and the port answers the relays and nobody else. The
+    # secret is this exit's alone - there is no pairing here to derive one
+    # from - and it is kept so a re-run does not invalidate what the panel has.
+    if [ "${TUNNEL:-off}" = backpack ] && install_backpack; then
+        step "Tunnel: BackPack $BACKPACK_VERSION - $TUNNEL_TRANSPORT, port $TUNNEL_PORT"
+        [ -n "${TUNNEL_SECRET:-}" ] || TUNNEL_SECRET="$(openssl rand -hex 24)"
+        mkdir -p "$TUNNEL_DIR"; chmod 700 "$TUNNEL_DIR"
+        note_file "$TUNNEL_DIR/tunnel.toml"
+        tmp="$(mktemp)"
+        {
+            printf '# written by the Fasty DNS installer - re-run it to change the tunnel\n'
+            printf '[direct]\nrole = "kharej"\naddr = "0.0.0.0:%s"\n' "$TUNNEL_PORT"
+            if [ "$TUNNEL_TRANSPORT" = wss ]; then
+                [ -f "$TUNNEL_DIR/tls.crt" ] || openssl req -x509 -newkey rsa:2048 -nodes \
+                    -days 3650 -subj "/CN=localhost" -keyout "$TUNNEL_DIR/tls.key" \
+                    -out "$TUNNEL_DIR/tls.crt" >/dev/null 2>&1 || true
+                printf 'tls_cert = "%s"\ntls_key = "%s"\n' "$TUNNEL_DIR/tls.crt" "$TUNNEL_DIR/tls.key"
+            fi
+            printf 'transport = "%s"\ntoken = "%s"\n' "$TUNNEL_TRANSPORT" "$TUNNEL_SECRET"
+        } > "$tmp"
+        install -m 600 "$tmp" "$TUNNEL_DIR/tunnel.toml"; rm -f "$tmp"
+        mkdir -p /etc/nftables.d
+        note_file "$TUNNEL_NFT"
+        cat > "$TUNNEL_NFT" <<EOF
+# written by the Fasty DNS installer: the tunnel's port answers the relays only
+table inet smartdns_tunnel
+delete table inet smartdns_tunnel
+table inet smartdns_tunnel {
+    chain input {
+        type filter hook input priority -5 ; policy accept ;
+        tcp dport $TUNNEL_PORT ip saddr != { $PEER_IP } drop
+        udp dport $TUNNEL_PORT ip saddr != { $PEER_IP } drop
+        meta nfproto ipv6 tcp dport $TUNNEL_PORT drop
+        meta nfproto ipv6 udp dport $TUNNEL_PORT drop
+    }
+}
+EOF
+        if nft -f "$TUNNEL_NFT" 2>/dev/null; then info "port $TUNNEL_PORT answers $PEER_IP only"
+        else warn "could not load the tunnel's firewall rule - port $TUNNEL_PORT is open to all"; fi
+        install_payload TUNNEL_SERVICE /etc/systemd/system/smartdns-tunnel.service || true
+        systemctl daemon-reload
+        enable_service smartdns-tunnel.service
+        systemctl restart smartdns-tunnel.service
+        sleep 2
+        if systemctl is-active --quiet smartdns-tunnel.service; then
+            info "tunnel listening on port $TUNNEL_PORT"
+        else
+            warn "the tunnel did not start - journalctl -u smartdns-tunnel"
+            TUNNEL=off
+        fi
+    else
+        [ "${TUNNEL:-off}" = backpack ] && { warn "no tunnel this run - the relay will reach this exit directly"; TUNNEL=off; }
+        systemctl disable --now smartdns-tunnel.service >/dev/null 2>&1 || true
+        rm -f "$TUNNEL_NFT"
+        rm -rf "$TUNNEL_DIR"
+        nft delete table inet smartdns_tunnel >/dev/null 2>&1 || true
+    fi
+    umask 077
+    set_env_key /etc/smart-dns/exit.env TUNNEL "${TUNNEL:-off}"
+    set_env_key /etc/smart-dns/exit.env TUNNEL_TRANSPORT "${TUNNEL_TRANSPORT:-}"
+    set_env_key /etc/smart-dns/exit.env TUNNEL_PORT "${TUNNEL_PORT:-}"
+    set_env_key /etc/smart-dns/exit.env TUNNEL_SECRET "${TUNNEL_SECRET:-}"
+    umask 022
+    chmod 600 /etc/smart-dns/exit.env
+    [ "${TUNNEL:-off}" = backpack ] \
+        && EXIT_TUNNEL_OUT="bp-$TUNNEL_TRANSPORT-$TUNNEL_PORT-d.$TUNNEL_SECRET"
 fi
 
 if [ "$ROLE" = relay ] && [ -z "${SYNC_TOKEN:-}" ] && [ -f /etc/smart-dns/sync.env ]; then
@@ -1776,6 +1905,9 @@ EOF
     install_payload DNS_PROFILE_UNIT /etc/systemd/system/smartdns-dns@.service || true
     mkdir -p /etc/smartdns-profiles
     install_payload SYNC_SERVICE /etc/systemd/system/smartdns-sync.service || true
+    # One instance per extra exit that has a tunnel; the sync agent starts and
+    # stops them as the panel's list of exits changes, so none is enabled here.
+    install_payload TUNNEL_EXIT_SERVICE /etc/systemd/system/smartdns-tunnel@.service || true
     systemctl daemon-reload
     enable_service smartdns-sync.service
     systemctl restart smartdns-sync.service
@@ -1823,7 +1955,11 @@ EOF
 fi
 
 # ---------------------------------------------------------------- tunnel
-if [ "$ROLE" = exit ]; then apply_tunnel "${SYNC_SECRET:-}"; else apply_tunnel "${SECRET:-}"; fi
+# An extra exit's tunnel is set up in its own section above, with its own
+# secret: it has no pairing to derive one from.
+if [ "$ROLE" = extra ]; then :
+elif [ "$ROLE" = exit ]; then apply_tunnel "${SYNC_SECRET:-}"
+else apply_tunnel "${SECRET:-}"; fi
 
 # ---------------------------------------------------------------- start
 step "Starting services"
@@ -1923,6 +2059,20 @@ if [ "$ROLE" = relay ]; then
     Manage the list with:  smartdns status | list | add | del | bypass
 
 ' "$RELAY_IP"
+elif [ "$ROLE" = extra ] && [ -n "$EXIT_TUNNEL_OUT" ]; then
+    printf '
+    This extra exit carries traffic for %s and accepts nothing else, through a
+    %s tunnel on port %s that the relay dials.
+    Add it in the Telegram bot, under 🛠 مدیریت -> 🌍 خروجی‌ها -> ➕, with the
+    tunnel line on the end:
+
+        a name | %s | %s
+
+    The relay needs BackPack for it: if it has never had a tunnel of its own,
+    run the installer there once with --tunnel. Without it the relay reaches
+    this exit directly and says so in its log.
+
+' "$PEER_IP" "$TUNNEL_TRANSPORT" "$TUNNEL_PORT" "$SELF_IP" "$EXIT_TUNNEL_OUT"
 elif [ "$ROLE" = extra ]; then
     printf '
     This extra exit carries traffic for %s and accepts nothing else.

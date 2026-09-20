@@ -202,6 +202,72 @@ else:
     ok, why = nginx_test("extra-exit", extra)
     check("an extra exit's config, letting in two relays", ok, why)
 
+print("an extra exit's own tunnel")
+TOKEN = "a" * 48
+check("a tunnel line is read", panel.parse_exit_tunnel("bp-stealth-8444-d.%s" % TOKEN)
+      == ("stealth", 8444, TOKEN))
+for bad in ("bp-stealth-8444-r.%s" % TOKEN, "bp-quic-8444-d.%s" % TOKEN,
+            "bp-stealth-99999-d.%s" % TOKEN, "bp-stealth-8444-d.nothex",
+            "stealth-8444", ""):
+    check("refused: %r" % bad[:28], panel.parse_exit_tunnel(bad) is None)
+tunnelled = sync.clean_exits({
+    "3": {"name": "آلمان", "ip": GERMANY,
+          "tunnel": {"transport": "stealth", "port": 8444, "token": TOKEN}},
+    "5": {"name": "فنلاند", "ip": FINLAND,
+          "tunnel": {"transport": "quic", "port": 8444, "token": TOKEN}},
+    "7": {"name": "لندن", "ip": "5.104.2.3",
+          "tunnel": {"transport": "wss", "port": 70000, "token": TOKEN}}})
+check("a tunnel the relay can dial is kept", tunnelled["3"]["tunnel"]["port"] == 8444)
+check("a transport it cannot is not", "tunnel" not in tunnelled["5"])
+check("nor a port that is not one", "tunnel" not in tunnelled["7"])
+ports = sync.exit_tunnel_ports(tunnelled)
+check("only the tunnelled exit gets loopback ports", set(ports) == {"3"})
+check("in a pair, from the range the installer keeps free",
+      ports["3"] == (sync.EXIT_TUNNEL_BASE, sync.EXIT_TUNNEL_BASE + 1))
+toml = sync.exit_tunnel_toml(tunnelled["3"], ports["3"])
+check("the relay dials the exit", 'role = "iran"' in toml and 'addr = "%s:8444"' % GERMANY in toml)
+check("and offers the two ports nginx sends it",
+      '"127.0.0.1:%d=443"' % sync.EXIT_TUNNEL_BASE in toml
+      and '"127.0.0.1:%d=80"' % (sync.EXIT_TUNNEL_BASE + 1) in toml)
+check("with the transport and token the exit printed",
+      'transport = "stealth"' in toml and 'token = "%s"' % TOKEN in toml)
+
+tdir = os.path.join(tmp, "tunnel")
+sync.TUNNEL_DIR = tdir
+sync.BACKPACK_BIN = os.path.join(tmp, "backpack")
+calls.clear()
+check("without BackPack on the relay, nothing is dialled and nobody is stranded",
+      sync.apply_exit_tunnels(tunnelled) == {} and not calls)
+open(sync.BACKPACK_BIN, "w").close()
+running = sync.apply_exit_tunnels(tunnelled)
+conf = os.path.join(tdir, "exit-3.toml")
+check("with it, one client per tunnelled exit", running == {"3": ports["3"]} and os.path.exists(conf))
+check("its config is private", oct(os.stat(conf).st_mode & 0o777) == "0o600")
+check("and its instance is started",
+      ("systemctl", "enable", "smartdns-tunnel@exit-3.service") in calls
+      and ("systemctl", "restart", "smartdns-tunnel@exit-3.service") in calls)
+calls.clear()
+check("an unchanged tunnel is left alone",
+      sync.apply_exit_tunnels(tunnelled) == running
+      and not [c for c in calls if c[:2] == ("systemctl", "restart")])
+calls.clear()
+check("an exit that loses its tunnel loses its client",
+      sync.apply_exit_tunnels({"3": {"name": "آلمان", "ip": GERMANY}}) == {}
+      and not os.path.exists(conf)
+      and ("systemctl", "disable", "--now", "smartdns-tunnel@exit-3.service") in calls)
+
+conf_text = sync.exits_conf(tunnelled, {"5.200.1.2": "3"}, ports)
+check("nginx sends that exit's customers to the tunnel",
+      "server 127.0.0.1:%d;" % sync.EXIT_TUNNEL_BASE in conf_text)
+check("falling back to the same exit unwrapped",
+      "server %s:443 backup;" % GERMANY in conf_text)
+check("and only then to the main exit", "server %s:443 backup;" % MAIN in conf_text)
+check("an exit with no tunnel is still reached directly",
+      "server %s:443;" % FINLAND in conf_text)
+if nginx:
+    ok, why = nginx_test("relay-tunnelled-exit", plain, conf_text)
+    check("nginx loads a map with a tunnelled exit in it", ok, why)
+
 print("the installer")
 logic = read("tools", "installer-logic.sh")
 check("offers an extra exit", "3) extra exit" in logic and "3|extra) ROLE=extra" in logic)
@@ -215,6 +281,17 @@ check("the relay's first map comes before nginx is tested",
       < logic.index('nginx -t || die "nginx rejected the config'))
 check("the relay records its own exit", 'set_env_key /etc/smart-dns/sync.env EXIT_IP "$EXIT_IP"' in logic)
 check("and the extra exit what it is", "> /etc/smart-dns/exit.env" in logic)
+check("an extra exit can be given a tunnel of its own", "ask_exit_tunnel()" in logic
+      and 'role = "kharej"' in logic)
+check("whose port answers the relays and nobody else",
+      "ip saddr != { $PEER_IP } drop" in logic)
+check("and whose line is printed to paste into the bot",
+      'EXIT_TUNNEL_OUT="bp-$TUNNEL_TRANSPORT-$TUNNEL_PORT-d.$TUNNEL_SECRET"' in logic)
+check("its secret survives a re-run", "TUNNEL_SECRET" in logic
+      and 'set_env_key /etc/smart-dns/exit.env TUNNEL_SECRET' in logic)
+check("the relay gets the per-exit unit", "smartdns-tunnel@.service" in logic)
+check("uninstall stops the per-exit tunnels", "'smartdns-tunnel@*'" in logic)
+check("their ports are kept off every other list", "18500" in logic and "18599" in logic)
 for name in ("smartdns-logs", "smartdns-restart", "smartdns-menu", "smartdns-tunnel"):
     check("%s knows an extra exit" % name, '"$ETC/exit.env"' in read("templates", name))
 

@@ -29,9 +29,7 @@ esac
 
 if [ -f "$ETC/sync.env" ]; then role=relay; env="$ETC/sync.env"
 elif [ -f "$ETC/panel.env" ]; then role=exit; env="$ETC/panel.env"
-elif [ -f "$ETC/exit.env" ]; then
-    echo "an extra exit has no tunnel - the relay reaches it directly; only the main exit has one."
-    exit 0
+elif [ -f "$ETC/exit.env" ]; then role=extra; env="$ETC/exit.env"
 else echo "Fasty DNS is not installed on this machine" >&2; exit 1; fi
 
 get() { sed -n "s/^$1=//p" "$env" 2>/dev/null | head -1; }
@@ -44,6 +42,19 @@ set_key() {
 # Set up by the installer, whether on or off at the moment.
 configured() { [ -f "$ETC/tunnel/tunnel.toml" ] && [ -n "$(get TUNNEL_TRANSPORT)" ]; }
 
+# The tunnels to extra exits, which the sync agent runs one of per exit. Not
+# the pair's own tunnel above: these have no settings on this machine but the
+# config the sync agent writes from what the panel sends.
+extra_tunnels() {
+    local u state conf port
+    for u in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+        conf="$ETC/tunnel/$(echo "$u" | sed 's/smartdns-tunnel@//; s/\.service$//').toml"
+        port="$(sed -n 's/^addr = "[^:]*:\([0-9]*\)"/\1/p' "$conf" 2>/dev/null | head -1)"
+        state="$(systemctl is-active "$u" 2>/dev/null || true)"
+        printf 'exit       %s - %s, port %s\n' "$u" "$state" "${port:-?}"
+    done
+}
+
 show() {
     if ! configured; then
         echo "no tunnel is set up on this $role - the relay reaches the exit directly."
@@ -54,7 +65,10 @@ show() {
     printf 'tunnel     BackPack, %s, %s, port %s\n' "$(get TUNNEL_TRANSPORT)" "$(get TUNNEL_DIRECTION)" "$port"
     printf 'setting    %s\n' "$([ "$(get TUNNEL)" = backpack ] && echo on || echo off)"
     printf 'service    %s\n' "$(systemctl is-active $UNIT 2>/dev/null || true)"
-    if [ "$role" = relay ]; then
+    if [ "$role" = extra ]; then
+        printf 'connected  %s tunnel connection(s) with the relay\n' \
+            "$(ss -Htn state established "( sport = :$port )" 2>/dev/null | wc -l)"
+    elif [ "$role" = relay ]; then
         # Straight at the tunnel's own end: through nginx the fallback would
         # answer too, and say nothing about the tunnel.
         local code

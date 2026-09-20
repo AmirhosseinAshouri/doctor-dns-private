@@ -238,8 +238,13 @@ def parse_plan(text):
 
 EXIT_FORMAT = ("نام و آی‌پی سرور خروجی را این‌طور بفرستید:\n"
                "آلمان ۲ | 203.0.113.10\n\n"
+               "اگر موقع نصب برایش تونل گرفتید، خط تونلی که چاپ کرده را هم آخرش بگذارید:\n"
+               "آلمان ۲ | 203.0.113.10 | bp-stealth-8444-d.<token>\n\n"
                "اول روی آن سرور doctor-dns.sh را اجرا کنید، گزینهٔ «3) extra exit» را بزنید "
                "و آی‌پی رله را بدهید.")
+TUNNEL_FORMAT = ("خط تونلی که نصب‌کنندهٔ آن سرور چاپ کرده را بفرستید:\n"
+                 "bp-stealth-8444-d.<token>\n\n"
+                 "برای برداشتن تونل و وصل شدن مستقیم، «حذف» را بفرستید.")
 
 
 def ms_text(ms):
@@ -921,6 +926,8 @@ class Bot:
             return self.exit_card(chat, ids[0])
         if cmd == "xr" and ids:
             return self.ask(chat, ("admin-exit-name", ids[0]), "نام تازهٔ این سرور خروجی:")
+        if cmd == "xu" and ids and ids[0] != 0:
+            return self.ask(chat, ("admin-exit-tunnel", ids[0]), TUNNEL_FORMAT)
         if cmd == "xt" and ids and ids[0] != 0:
             self.store.run("UPDATE exits SET active = 1 - active WHERE id = ?", (ids[0],))
             return self.exit_card(chat, ids[0])
@@ -985,17 +992,43 @@ class Bot:
             self.say(chat, "✅ %s%s" % (done, "؛ حساب فعال شد" if joined else ""))
             return self.user_card(chat, uid)
         if kind == "admin-exit-new":
-            name, _, ip = text.partition("|")
-            name, ip = name.strip()[:40], ip.translate(DIGITS).strip()
+            parts = [x.strip() for x in text.split("|")]
+            name = parts[0][:40] if parts else ""
+            ip = parts[1].translate(DIGITS) if len(parts) > 1 else ""
+            tunnel = P.parse_exit_tunnel(parts[2]) if len(parts) > 2 else None
             why = self.exit_problem(name, ip)
+            if not why and len(parts) > 2 and not tunnel:
+                why = "خط تونل درست نیست."
             if why:
                 return self.say(chat, "⚠️ %s\n\n%s" % (why, EXIT_FORMAT), cancel_kb())
             self.state.pop(chat, None)
-            eid = self.store.run("INSERT INTO exits (name, ip, active, created_at)"
-                                 " VALUES (?, ?, 1, ?)", (name, ip, P.now())).lastrowid
+            eid = self.store.run(
+                "INSERT INTO exits (name, ip, active, created_at, tunnel_transport,"
+                " tunnel_port, tunnel_token) VALUES (?, ?, 1, ?, ?, ?, ?)",
+                (name, ip, P.now()) + (tunnel or (None, None, None))).lastrowid
             P.log(P.INFO, "bot: exit %d (%s) added by telegram %d" % (eid, ip, chat))
             self.say(chat, "✅ اضافه شد. رله تا ۳۰ ثانیه دیگر آن را می‌شناسد و تا ۵ دقیقه "
                            "پینگش را می‌گیرد.")
+            return self.exit_card(chat, eid)
+        if kind == "admin-exit-tunnel":
+            eid = waiting[1]
+            if text.strip() in ("حذف", "-", "off"):
+                self.state.pop(chat, None)
+                self.store.run("UPDATE exits SET tunnel_transport = NULL, tunnel_port = NULL,"
+                               " tunnel_token = NULL WHERE id = ?", (eid,))
+                self.say(chat, "✅ تونل برداشته شد؛ رله تا ۳۰ ثانیه دیگر مستقیم وصل می‌شود.")
+                return self.exit_card(chat, eid)
+            tunnel = P.parse_exit_tunnel(text)
+            if not tunnel:
+                return self.say(chat, "⚠️ خط تونل درست نیست.\n\n%s" % TUNNEL_FORMAT, cancel_kb())
+            self.state.pop(chat, None)
+            self.store.run("UPDATE exits SET tunnel_transport = ?, tunnel_port = ?,"
+                           " tunnel_token = ? WHERE id = ?", tunnel + (eid,))
+            P.log(P.INFO, "bot: exit %d given a %s tunnel on port %d by telegram %d"
+                  % (eid, tunnel[0], tunnel[1], chat))
+            self.say(chat, "✅ تونل ذخیره شد. رله تا ۳۰ ثانیه دیگر آن را برقرار می‌کند.\n"
+                           "اگر رله تا حالا هیچ تونلی نداشته، اول روی رله "
+                           "doctor-dns.sh را با --tunnel اجرا کنید تا BackPack نصب شود.")
             return self.exit_card(chat, eid)
         if kind == "admin-exit-name":
             name = text.strip()[:40]
@@ -1301,11 +1334,16 @@ class Bot:
         r = self.store.one("SELECT * FROM exits WHERE id = ?", (eid,))
         if not r:
             return self.say(chat, "این سرور پیدا نشد.")
-        self.say(chat, "%s\nآی‌پی: %s\nپینگ: %s\nوضعیت: %s\nانتخاب کرده‌اند: %d نفر" % (
-            r["name"], r["ip"], ms_text(ms), "فعال" if r["active"] else "غیرفعال", chosen), kb(
+        tunnel = ("%s، پورت %d" % (r["tunnel_transport"], r["tunnel_port"])
+                  if r["tunnel_transport"] and r["tunnel_token"] else "ندارد — مستقیم")
+        self.say(chat, "%s\nآی‌پی: %s\nپینگ: %s\nوضعیت: %s\nتونل: %s\n"
+                       "انتخاب کرده‌اند: %d نفر" % (
+                           r["name"], r["ip"], ms_text(ms),
+                           "فعال" if r["active"] else "غیرفعال", tunnel, chosen), kb(
             [btn("✏️ نام", "a:xr:%d" % eid),
              btn("⏸ غیرفعال کردن" if r["active"] else "▶️ فعال کردن", "a:xt:%d" % eid)],
-            [btn("🗑 حذف", "a:xd:%d" % eid)], [btn("↩️ همهٔ خروجی‌ها", "a:ex")]))
+            [btn("🔀 تونل", "a:xu:%d" % eid), btn("🗑 حذف", "a:xd:%d" % eid)],
+            [btn("↩️ همهٔ خروجی‌ها", "a:ex")]))
 
     # game pings
     def admin_pings(self, chat):

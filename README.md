@@ -273,8 +273,26 @@ rewritten only when it changes and only once `nginx -t` accepts it. If an extra
 exit stops answering, nginx sends its customers to the main exit until it is
 back.
 
-The tunnel, when there is one, stays between the relay and the main exit;
-extra exits are reached directly.
+**A tunnel to an extra exit.** An extra exit can have one of its own. Its
+installer asks - transport and port, the relay always dials - and prints one
+line at the end:
+
+```
+a name | 203.0.113.10 | bp-stealth-8444-d.<token>
+```
+
+Paste that into the bot when you add the exit, or later under the exit's
+**🔀 تونل** button; send `حذف` there to go back to plain TCP. The relay then
+runs one BackPack client per tunnelled exit, and nginx sends that exit's
+customers to its end of the tunnel, falling back to the same exit unwrapped
+and only then to the main exit.
+
+The relay needs BackPack for this. If it has never had a tunnel of its own,
+run the installer there once with `--tunnel`; until then the relay reaches
+such an exit directly and says so in `smartdns-logs`.
+
+The pair's own tunnel is unchanged: relay and main exit, its settings carried
+by the pairing token.
 
 ### Access control
 
