@@ -62,6 +62,8 @@ PAYLOADS = [
     ("EPIC_PIN", "templates/epic-pin"),
     ("EPIC_PIN_SERVICE", "templates/epic-pin.service"),
     ("EPIC_PIN_TIMER", "templates/epic-pin.timer"),
+    ("FONT_SPACE", "assets/fonts/space-grotesk.woff2.b64"),
+    ("FONT_MONO", "assets/fonts/jetbrains-mono.woff2.b64"),
     ("DOMAINS", "domains/domains.txt"),
     ("SERVICES", "domains/services.json"),
 ]

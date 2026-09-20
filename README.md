@@ -626,6 +626,25 @@ only typing an address and paying card to card.
   anything is recorded, only against the order it was started for, and only
   for its full price. Prices are in toman; Zibal is asked for the same in rial.
 
+### The look of it
+
+The panels and the bot are dressed as **Fasty DNS**: near-black `#07080A`,
+signal green `#C7F000`, 1px `#23272E` lines, no rounded corners and no
+shadows - depth comes from the surface value and the line. Space Grotesk sets
+the text, JetBrains Mono every numeral, address and unit, which is the
+system's strictest rule.
+
+Both faces are **carried inside `doctor-dns.sh`** and served by the panels
+themselves, from `/usr/local/share/smart-dns/fonts`. Google Fonts is blocked
+in Iran, and a page that cannot fetch its font draws in whatever the device
+happens to have. They hold Latin and numerals only - about 50 KB of the
+installer between them - and Persian text falls through to the device's own
+face.
+
+The mark is drawn in the page as SVG rather than fetched, so it costs no
+request and cannot go missing. `assets/fonts/` holds the two faces as base64;
+the brand bundle they came from is not in this repository.
+
 ## How it is built
 
 `doctor-dns.sh` is generated, not hand-edited. Everything lives in

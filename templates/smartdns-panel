@@ -2276,7 +2276,7 @@ class API(http.server.BaseHTTPRequestHandler):
             return {"ok": False, "message": "پرداخت آنلاین الان فعال نیست"}
         return {"ok": True, "amount": int(t["amount"]), "merchant": merchant,
                 "authority": t["authority"] or "",
-                "description": "doctor dns - %s" % (t["plan_name"] or "plan")}
+                "description": "Fasty DNS - %s" % (t["plan_name"] or "plan")}
 
     def do_pay_started(self, body):
         t = self._order(body)

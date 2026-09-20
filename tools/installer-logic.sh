@@ -1147,6 +1147,25 @@ case "$ENABLE_BBR" in
 esac
 info "congestion=$(sysctl -n net.ipv4.tcp_congestion_control) qdisc=$(sysctl -n net.core.default_qdisc)"
 
+# ---------------------------------------------------------------- fonts
+# The two faces the panels are drawn in, carried in this file and served by the
+# panels themselves. Google Fonts is blocked in Iran, so a panel that fetched
+# them would draw in whatever the device happened to have - and on an operator's
+# phone in Iran that is not the brand at all. Latin and numerals only: Persian
+# text falls through to the device's own face. An extra exit has no panel.
+if [ "$ROLE" != extra ]; then
+    step "Panel fonts"
+    mkdir -p /usr/local/share/smart-dns/fonts
+    for face in space:FONT_SPACE mono:FONT_MONO; do
+        dest="/usr/local/share/smart-dns/fonts/${face%%:*}.woff2"
+        note_file "$dest"
+        payload "${face#*:}" | base64 -d > "$dest" 2>/dev/null \
+            || warn "could not write $dest - the panels will fall back to the device's fonts"
+        chmod 644 "$dest" 2>/dev/null || true
+    done
+    info "panel fonts in /usr/local/share/smart-dns/fonts"
+fi
+
 # ---------------------------------------------------------------- nginx
 step "nginx"
 MOD="$(find /usr/lib/nginx/modules -name ngx_stream_module.so 2>/dev/null | head -1)"

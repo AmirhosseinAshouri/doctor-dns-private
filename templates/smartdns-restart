@@ -1,5 +1,5 @@
 #!/bin/bash
-# smartdns-restart - restart every part of doctor dns on this machine at once.
+# smartdns-restart - restart every part of Fasty DNS on this machine at once.
 #
 # usage: smartdns-restart      restart them all, then say which came back up
 #        smartdns-restart -h   this help
@@ -35,7 +35,7 @@ elif [ -f "$ETC/exit.env" ]; then
     role=extra
     units="nginx"
 else
-    echo "doctor dns is not installed on this machine" >&2
+    echo "Fasty DNS is not installed on this machine" >&2
     exit 1
 fi
 
@@ -48,7 +48,7 @@ restart() {
     systemctl restart "$@" 2>&1 | sed 's/^/    /'
 }
 
-echo "restarting doctor dns - $role"
+echo "restarting Fasty DNS - $role"
 [ "$role" = relay ] && echo "customers' open connections drop for a moment and come straight back"
 echo
 

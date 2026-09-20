@@ -304,7 +304,7 @@ def cmd_summary():
     regs = registered()
     ports = assignment()
     on_profile = set().union(*ports.values()) if ports else set()
-    print("doctor dns routing - this relay answers as %s" % (me or "?"))
+    print("Fasty DNS routing - this relay answers as %s" % (me or "?"))
     print()
     print("  %5s  %9s  %8s  %6s  %6s  %-9s %s"
           % ("PORT", "CUSTOMERS", "REDIRECT", "BYPASS", "PINNED", "STATE", "TEMPLATE"))

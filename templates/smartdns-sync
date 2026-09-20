@@ -58,6 +58,8 @@ INTERVAL = 30
 # cut off from the service but must still be able to reach the one page that
 # fixes it.
 PANEL_TLS_PORT = 8443
+# Where the installer puts the panel's two faces.
+FONT_DIR = "/usr/local/share/smart-dns/fonts"
 
 # A photograph of a bank slip, from a phone camera. The exit refuses anything
 # past four megabytes, so there is no point carrying more than that up to it.
@@ -1189,72 +1191,92 @@ def sync_loop():
 
 # ------------------------------------------------------------- user panel
 USER_CSS = """
+/* Fasty DNS brand system: void #07080A, signal #C7F000, 1px lines, no radius.
+   The two faces are served by this panel itself - Google Fonts is blocked in
+   Iran, and a page that cannot fetch its font draws in whatever is to hand.
+   Persian text falls through to the device's own face; the Latin and every
+   numeral are the brand's. */
+@font-face{font-family:'Space Grotesk';src:url(/f/space.woff2) format('woff2');
+ font-weight:300 700;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url(/f/mono.woff2) format('woff2');
+ font-weight:400 800;font-style:normal;font-display:swap}
+:root{--void:#07080A;--surface:#0D0F12;--raised:#14171C;--line:#23272E;
+ --line2:#35404A;--dim:#646B76;--muted:#9AA1AC;--text:#EDEFF2;--signal:#C7F000;
+ --pressed:#8BA800;--wash:#1F2610;--warn:#FFB020;--warn-wash:#2A2110;
+ --fail:#FF4D3D;--fail-wash:#2A1414}
 *{box-sizing:border-box}
-body{margin:0;background:#0f1115;color:#e6e8eb;
- font:15px/1.9 system-ui,'Segoe UI',Tahoma,sans-serif;
+body{margin:0;background:var(--void);color:var(--text);
+ font:16px/1.6 'Space Grotesk',Vazirmatn,Tahoma,system-ui,sans-serif;
  display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-.card{background:#171a21;border:1px solid #262b36;border-radius:16px;
- padding:26px;max-width:440px;width:100%}
-h1{font-size:18px;margin:0 0 4px;font-weight:600}
-.sub{color:#8b949e;font-size:13px;margin-bottom:20px}
-.row{display:flex;justify-content:space-between;align-items:baseline;
- padding:11px 0;border-bottom:1px solid #1c2029}
+.shell{width:100%;max-width:460px}
+.card{background:var(--surface);border:1px solid var(--line);padding:24px}
+h1{font-size:24px;margin:0 0 4px;font-weight:600;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:14px;margin-bottom:20px}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+ padding:12px 0;border-bottom:1px solid var(--line)}
 .row:last-of-type{border-bottom:0}
-.k{color:#8b949e;font-size:13px}
-.v{font-weight:600}
-code{background:#0f1115;padding:3px 9px;border-radius:6px;color:#7dd3a0;font-size:14px}
-.bar{height:8px;background:#0f1115;border-radius:4px;overflow:hidden;margin-top:10px}
-.bar i{display:block;height:100%;background:#7dd3a0}
-.bar i.warn{background:#e3b341}
-.bar i.hot{background:#f85149}
-button,a.btn{display:block;width:100%;margin-top:18px;padding:13px;font:inherit;
- font-weight:600;text-align:center;text-decoration:none;
- background:#238636;color:#fff;border:0;border-radius:10px;cursor:pointer}
-button:hover,a.btn:hover{background:#2ea043}
-button.ghost,a.btn.ghost{background:transparent;border:1px solid #30363d;
- color:#9aa4b2;font-weight:400}
-button.ghost:hover,a.btn.ghost:hover{background:#1c2029}
-label{display:block;color:#8b949e;font-size:12px;margin:14px 0 6px}
-input{width:100%;padding:12px;font:inherit;background:#0f1115;color:#e6e8eb;
- border:1px solid #30363d;border-radius:10px}
-input:focus{outline:0;border-color:#238636}
-.alt{text-align:center;margin-top:18px;font-size:13px;color:#8b949e}
-.alt a{color:#7dd3a0}
-.big{font-size:22px;font-weight:600;text-align:center;letter-spacing:.5px;
- background:#0f1115;border:1px solid #262b36;border-radius:12px;padding:18px;
- color:#7dd3a0;margin:6px 0 4px;direction:ltr}
-.note{color:#8b949e;font-size:12px;line-height:1.8;margin-top:16px}
-.msg{padding:11px 14px;border-radius:9px;margin-bottom:16px;font-size:13px}
-.msg.good{background:#12261a;border:1px solid #238636}
-.msg.err{background:#2b1416;border:1px solid #6e2c2c}
-.msg.warnbox{background:#2b2411;border:1px solid #6e5a2c}
-.icon{font-size:40px;text-align:center;line-height:1;margin-bottom:12px}
-.dns{margin-top:20px;padding:16px;background:#0f1115;border:1px solid #262b36;
- border-radius:12px}
-.dns .k{color:#8b949e;font-size:12px;margin-bottom:8px}
+.k{color:var(--dim);font-size:11px;font-family:'JetBrains Mono',ui-monospace,monospace;
+ letter-spacing:.16em;text-transform:uppercase}
+.v{font-weight:500}
+code,.num{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:15px;
+ color:var(--text);direction:ltr;unicode-bidi:isolate}
+code{background:var(--void);border:1px solid var(--line);padding:2px 8px;font-size:14px}
+.bar{height:6px;background:var(--void);border:1px solid var(--line);margin-top:10px}
+.bar i{display:block;height:100%;background:var(--signal)}
+.bar i.warn{background:var(--warn)}
+.bar i.hot{background:var(--fail)}
+button,a.btn{display:block;width:100%;margin-top:16px;padding:13px 20px;min-height:44px;
+ font:inherit;font-weight:600;font-size:15px;text-align:center;text-decoration:none;
+ background:var(--signal);color:var(--void);border:0;cursor:pointer;
+ transition:background .12s ease-out,border-color .12s ease-out,color .12s ease-out}
+button:hover,a.btn:hover{background:#D9FF3A}
+button:active,a.btn:active{background:var(--pressed)}
+button.ghost,a.btn.ghost{background:transparent;border:1px solid var(--line2);
+ color:var(--text);font-weight:500}
+button.ghost:hover,a.btn.ghost:hover{background:transparent;border-color:var(--signal);
+ color:var(--signal)}
+label{display:block;color:var(--muted);font-size:13px;margin:14px 0 6px}
+input{width:100%;padding:13px 14px;background:var(--void);color:var(--text);
+ border:1px solid var(--line);font:15px/1.4 'JetBrains Mono',ui-monospace,monospace}
+input:focus{outline:0;border-color:var(--signal)}
+.alt{text-align:center;margin-top:18px;font-size:14px;color:var(--muted)}
+.alt a{color:var(--signal);text-decoration:none}
+.big{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:30px;font-weight:500;
+ letter-spacing:-.03em;text-align:center;background:var(--void);
+ border:1px solid var(--line);padding:18px;color:var(--signal);margin:6px 0 4px;
+ direction:ltr;unicode-bidi:isolate}
+.note{color:var(--dim);font-size:13px;line-height:1.7;margin-top:16px}
+.msg{padding:11px 14px;margin-bottom:16px;font-size:14px;border:1px solid var(--line)}
+.msg.good{background:var(--wash);border-color:var(--signal)}
+.msg.err{background:var(--fail-wash);border-color:var(--fail)}
+.msg.warnbox{background:var(--warn-wash);border-color:var(--warn)}
+.icon{font-size:38px;text-align:center;line-height:1;margin-bottom:12px}
+.dns{margin-top:20px;padding:16px;background:var(--void);border:1px solid var(--line)}
+.dns .k{margin-bottom:8px;display:block}
 .dns .big{margin:0}
 .dns .note{margin-top:12px}
 .dns input[type=file]{width:100%;padding:10px;font-size:12px;
- border:1px dashed #30363d;background:transparent;margin-bottom:4px}
-details.pw{margin-top:16px;border:1px solid #262b36;border-radius:12px;
- background:#0f1115}
-details.pw>summary{padding:14px 16px;cursor:pointer;color:#9aa4b2;font-size:13px;
+ border:1px dashed var(--line2);background:transparent;margin-bottom:4px}
+details.pw{margin-top:16px;border:1px solid var(--line);background:var(--void)}
+details.pw>summary{padding:14px 16px;cursor:pointer;color:var(--muted);font-size:14px;
  list-style:none}
 details.pw>summary::-webkit-details-marker{display:none}
-details.pw>summary::before{content:'b8';margin-left:8px;font-size:11px}
-details.pw[open]>summary::before{content:'be'}
+details.pw>summary::before{content:'▸';margin-left:8px;font-size:11px;color:var(--dim)}
+details.pw[open]>summary::before{content:'▾'}
 details.pw form{padding:0 16px 4px}
 details.pw .note{padding:0 16px 14px;margin-top:8px}
-.ok{color:#7dd3a0}.bad{color:#f85149}.warn{color:#e3b341}
-.shell{width:100%;max-width:440px}
-.brand{text-align:center;margin:0 0 18px;direction:ltr;line-height:1.15}
-.brand .mark{font-size:30px;vertical-align:middle;margin-right:8px}
-.brand .name{display:inline-block;vertical-align:middle;font-size:clamp(32px,10vw,42px);
- font-weight:800;letter-spacing:1.5px;color:#7dd3a0;
- background:linear-gradient(90deg,#7dd3a0,#58a6ff);-webkit-background-clip:text;
- background-clip:text;-webkit-text-fill-color:transparent}
-footer{text-align:center;color:#6e7681;font-size:12px;padding:16px 0 0;direction:ltr}
-.manual input{direction:ltr;text-align:center;letter-spacing:.5px}
+.ok{color:var(--signal)}.bad{color:var(--fail)}.warn{color:var(--warn)}
+.brand{display:flex;align-items:center;justify-content:center;gap:10px;
+ margin:0 0 18px;direction:ltr}
+.brand svg{display:block}
+.brand .name{font-size:22px;font-weight:700;letter-spacing:-.025em;color:var(--text)}
+.brand .dns{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;
+ font-weight:500;letter-spacing:.22em;color:var(--muted);margin:0;padding:0;
+ background:none;border:0}
+footer{text-align:center;color:var(--dim);font-size:11px;padding:16px 0 0;direction:ltr;
+ font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:.16em;
+ text-transform:uppercase}
+.manual input{text-align:center}
 """
 
 # Where the installer writes the version it installed. Read per page rather
@@ -1270,32 +1292,42 @@ def app_version():
         return ""
 
 
+# The mark, drawn rather than fetched: a rounded square in signal with two
+# chevrons cut out of it. 44x44 is the brand's own grid.
+MARK = ("<svg viewBox='0 0 44 44' width='%d' height='%d' aria-hidden='true'>"
+        "<rect width='44' height='44' rx='11' fill='#C7F000'/>"
+        "<path d='M12 14 L20 22 L12 30' stroke='#07080A' stroke-width='3.4'"
+        " stroke-linecap='square' fill='none'/>"
+        "<path d='M23 14 L31 22 L23 30' stroke='#07080A' stroke-width='3.4'"
+        " stroke-linecap='square' fill='none'/></svg>")
+FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 44'"
+           "%3E%3Crect width='44' height='44' rx='11' fill='%23C7F000'/%3E%3Cpath d='M12 14"
+           " L20 22 L12 30' stroke='%2307080A' stroke-width='3.4' fill='none'/%3E%3Cpath"
+           " d='M23 14 L31 22 L23 30' stroke='%2307080A' stroke-width='3.4' fill='none'/%3E%3C/svg%3E")
+
+
 def brand_html():
-    return ("<div class='brand'><span class='mark'>🩺</span>"
-            "<span class='name'>doctor dns</span></div>")
+    return ("<div class='brand'>%s<span class='name'>Fasty</span>"
+            "<span class='dns'>DNS</span></div>" % (MARK % (28, 28)))
 
 
 def footer_html():
     v = app_version()
-    return "<footer>doctor dns%s</footer>" % (" v" + html.escape(v) if v else "")
+    return "<footer>FASTY DNS%s</footer>" % (" · v" + html.escape(v) if v else "")
 
 
 def brand():
-    """What to call the service on the customer's pages.
-
-    The domain they typed to get here. Nothing to configure, nothing that can
-    disagree with the address in the browser bar, and no second place to
-    rename the service and forget.
-    """
-    return (CFG or {}).get("PANEL_DOMAIN") or "سرویس"
+    """What to call the service on the customer's pages."""
+    return "Fasty DNS"
 
 
 def user_page(inner):
     return ("""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%s</title><style>%s</style></head><body>
+<title>%s</title><link rel="icon" href="%s"><style>%s</style></head><body>
 <div class="shell">%s<div class="card">%s</div>%s</div></body></html>"""
-            % (html.escape(brand()), USER_CSS, brand_html(), inner, footer_html()))
+            % (html.escape(brand()), FAVICON, USER_CSS, brand_html(), inner,
+               footer_html()))
 
 
 # A Persian keyboard types these, and the address box should not care.
@@ -1612,6 +1644,24 @@ class UserPanel(http.server.BaseHTTPRequestHandler):
         # anyone register any address by sending one.
         return self.client_address[0]
 
+    def send_font(self, name):
+        """One of the two faces the pages are drawn in.
+
+        Served from here because Google Fonts is blocked in Iran. Cached for a
+        year: the files only change when the installer replaces them, and then
+        under the same names, which costs a customer one stale-looking page at
+        worst.
+        """
+        if name not in ("space.woff2", "mono.woff2"):
+            return self.send_html("<h1>404</h1>", 404)
+        try:
+            with open(os.path.join(FONT_DIR, name), "rb") as fh:
+                blob = fh.read()
+        except OSError:
+            return self.send_html("<h1>404</h1>", 404)
+        return self.send(blob, 200, {"Content-Type": "font/woff2",
+                                     "Cache-Control": "public, max-age=31536000, immutable"})
+
     def send_html(self, body, code=200, headers=None, frame=False):
         blob = user_page(body).encode("utf-8")
         # See send(): a clean buffer, so a failed attempt cannot leave half a
@@ -1733,7 +1783,7 @@ class UserPanel(http.server.BaseHTTPRequestHandler):
             res = zibal("request", {
                 "merchant": order["merchant"], "amount": int(order["amount"]) * 10,
                 "callbackUrl": back, "orderId": token,
-                "description": order.get("description") or "doctor dns"})
+                "description": order.get("description") or "Fasty DNS"})
         except Exception as e:
             log(ERROR, "panel: zibal unreachable: %s" % e)
             return self.send_html(pay_page(
@@ -1840,6 +1890,8 @@ class UserPanel(http.server.BaseHTTPRequestHandler):
             return self.send("", 303, {"Location": "/",
                                        "Set-Cookie": "sdu=; Path=/; Max-Age=0"})
 
+        if path.startswith("/f/"):
+            return self.send_font(path[len("/f/"):])
         if path == "/tg":
             return self.send_html(tg_page(self.client_ip()), frame=True)
         if path == "/pay/back":

@@ -55,20 +55,20 @@ admin.VERSION_FILE = sync.VERSION_FILE = vf
 
 print("the header and the version")
 p = admin.page("کاربران", "<p>x</p>", {"ADMIN_PATH": "p"}, "users")
-check("admin pages carry the name, large", "doctor dns" in p and "class='brand'" in p)
+check("admin pages carry the lockup", ">Fasty<" in p and ">DNS<" in p and "class='brand'" in p)
 check("above the page's own title", p.index("class='brand'") < p.index("<header>"))
-check("and the version at the foot", "doctor dns v0.3.99</footer>" in p, p[-200:])
+check("and the version at the foot", "FASTY DNS · v0.3.99</footer>" in p, p[-200:])
 login = admin.login_page({"ADMIN_PATH": "p"})
 check("so does the admin login page", "class='brand'" in login and "v0.3.99" in login)
 u = sync.user_page("<h1>x</h1>")
 check("customer pages carry both",
-      "class='brand'" in u and "doctor dns v0.3.99</footer>" in u, u[-300:])
+      "class='brand'" in u and "FASTY DNS · v0.3.99</footer>" in u, u[-300:])
 check("around the card, not inside it",
       u.index("class='brand'") < u.index('class="card"') < u.index("<footer>"))
 admin.VERSION_FILE = sync.VERSION_FILE = os.path.join(tmp, "missing")
 check("with no version file the foot says only the name",
-      "<footer>doctor dns</footer>" in admin.page("t", "", {"ADMIN_PATH": "p"})
-      and "<footer>doctor dns</footer>" in sync.user_page("x"))
+      "<footer>FASTY DNS</footer>" in admin.page("t", "", {"ADMIN_PATH": "p"})
+      and "<footer>FASTY DNS</footer>" in sync.user_page("x"))
 sync.VERSION_FILE = vf
 
 print("an address typed by hand")
