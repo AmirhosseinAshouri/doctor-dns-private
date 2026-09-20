@@ -4349,6 +4349,36 @@ exit 0
 #    def active_exits(self):
 #        return self.q("SELECT * FROM exits WHERE active = 1 ORDER BY id")
 #
+#    def note_exit_game_pings(self, relay, pings):
+#        """Keep how each game answered through each exit, the latest round only.
+#
+#        Checked field by field like the rest: customers read these in the bot,
+#        and a relay is trusted to report numbers, not to write into chats.
+#        """
+#        if not isinstance(pings, dict) or not pings:
+#            return
+#        exits = {}
+#        for eid, games in list(pings.items())[:32]:
+#            if not (isinstance(eid, str) and eid.isdigit() and isinstance(games, dict)):
+#                continue
+#            kept = {}
+#            for key, g in list(games.items())[:64]:
+#                if not (isinstance(key, str) and re.fullmatch(r"[a-z0-9_-]{1,32}", key)
+#                        and isinstance(g, dict)):
+#                    continue
+#                ms = g.get("ms")
+#                kept[key] = {
+#                    "label": str(g.get("label") or key)[:40],
+#                    "ms": float(ms) if isinstance(ms, (int, float)) and 0 <= ms < 60000 else None,
+#                    "state": str(g.get("state") or "")[:16]}
+#            if kept:
+#                exits[eid] = kept
+#        if not exits:
+#            return
+#        every = exit_game_pings(self)
+#        every[relay] = {"at": now(), "exits": exits}
+#        self.set_setting("relay_exit_game_pings", json.dumps(every, ensure_ascii=False))
+#
 #    def note_exit_pings(self, relay, pings):
 #        """Keep how fast each exit answered one relay, the latest round only."""
 #        if not isinstance(pings, dict) or not pings:
@@ -4982,6 +5012,32 @@ exit 0
 #    return every if isinstance(every, dict) else {}
 #
 #
+#def exit_game_pings(store):
+#    """{relay: {"at", "exits": {exit id: {game: {...}}}}}, the latest from each."""
+#    try:
+#        every = json.loads(store.setting("relay_exit_game_pings", "") or "{}")
+#    except ValueError:
+#        return {}
+#    return every if isinstance(every, dict) else {}
+#
+#
+#def games_through_exit(store, exit_id):
+#    """{game: {"label", "ms", "state"}} for one exit, from the freshest round
+#    any relay reported - and ("", 0) when nothing recent names that exit."""
+#    best, seen_at = {}, None
+#    stamp = datetime.now(timezone.utc)
+#    for entry in exit_game_pings(store).values():
+#        if not isinstance(entry, dict):
+#            continue
+#        seen = parse_ts(entry.get("at"))
+#        if not seen or (stamp - seen).total_seconds() > PING_STALE_MINUTES * 60:
+#            continue
+#        games = (entry.get("exits") or {}).get(str(exit_id))
+#        if isinstance(games, dict) and games and (seen_at is None or seen > seen_at):
+#            best, seen_at = games, seen
+#    return best, seen_at
+#
+#
 #def fresh_exit_pings(store, relay=None):
 #    """{exit id: fastest ms} from recent rounds - one relay's, or the best of all.
 #
@@ -5466,6 +5522,8 @@ exit 0
 #            self.store.note_relay(body.get("panel"), body.get("dns"))
 #            self.store.note_pings(self.client_address[0], body.get("pings"))
 #            self.store.note_exit_pings(self.client_address[0], body.get("exit_pings"))
+#            self.store.note_exit_game_pings(self.client_address[0],
+#                                            body.get("exit_game_pings"))
 #            # Quotas are evaluated here, on fresh numbers, so a user who runs
 #            # out is off the list this relay is about to be handed.
 #            try:
@@ -6752,6 +6810,12 @@ exit 0
 #FILTERED_PREFIX = "10.10.34."
 #PING_TARGETS = {}       # what to ping, from the exit
 #PINGS = {}              # the last round, until the next sync takes it
+## How long a game's server may take to answer through an exit. Longer than a
+## plain connection: this one crosses the relay, the exit and whatever is
+## between the exit and the game.
+#THROUGH_TIMEOUT = 4.0
+#EXIT_ROUTES = {}        # exit id -> (host, port) this relay reaches it at
+#EXIT_GAME_PINGS = {}    # the last round of game pings through each exit
 #PING_LOCK = threading.Lock()
 #
 #
@@ -6894,6 +6958,15 @@ exit 0
 #                EXIT_PINGS.update(measured)
 #        except Exception as e:
 #            log(WARN, "exit pings failed: %s" % e)
+#        try:
+#            with PING_LOCK:
+#                routes = dict(EXIT_ROUTES)
+#            through = ping_through_exits(targets, routes) if targets and routes else {}
+#            with PING_LOCK:
+#                EXIT_GAME_PINGS.clear()
+#                EXIT_GAME_PINGS.update(through)
+#        except Exception as e:
+#            log(WARN, "game pings through the exits failed: %s" % e)
 #        time.sleep(PING_EVERY)
 #
 #
@@ -6942,6 +7015,89 @@ exit 0
 #                    and isinstance(token, str) and re.fullmatch(r"[0-9a-f]{16,64}", token)):
 #                kept["tunnel"] = {"transport": transport, "port": port, "token": token}
 #        out[eid] = kept
+#    return out
+#
+#
+#def time_through(endpoint, host):
+#    """(milliseconds, state) for reaching `host` the way a customer does.
+#
+#    A TLS handshake to the exit's proxy with the game's name in it: the exit
+#    reads that name, opens its own connection to the game and hands the two
+#    ends together, so what is timed is the whole path a customer's first
+#    packet takes - and, where there is one, the tunnel as well. The
+#    certificate is the game's own and is not checked: nothing here reads or
+#    sends anything inside the session.
+#    """
+#    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+#    ctx.check_hostname = False
+#    ctx.verify_mode = ssl.CERT_NONE
+#    start = time.monotonic()
+#    try:
+#        raw = socket.create_connection(endpoint, timeout=THROUGH_TIMEOUT)
+#    except OSError:
+#        return None, "no-exit"
+#    try:
+#        tls = ctx.wrap_socket(raw, server_hostname=host)
+#        ms = round((time.monotonic() - start) * 1000, 1)
+#        tls.close()
+#        return ms, "ok"
+#    except (ssl.SSLError, OSError):
+#        return None, "no-answer"
+#    finally:
+#        try:
+#            raw.close()
+#        except OSError:
+#            pass
+#
+#
+#def ping_through_exits(targets, routes):
+#    """One game host per exit: {exit id: {game: {"label", "ms", "state"}}}.
+#
+#    One host, not all of them, because this is asked of every exit: the first
+#    of each game's names, which is the one the service is known by.
+#    """
+#    jobs = []
+#    for eid, endpoint in sorted(routes.items()):
+#        for key, info in sorted(targets.items()):
+#            hosts = (info.get("hosts") or [])[:1]
+#            if hosts:
+#                jobs.append((eid, key, info.get("label") or key, endpoint, hosts[0]))
+#    out = {}
+#    if not jobs:
+#        return out
+#
+#    def one(job):
+#        eid, key, label, endpoint, host = job
+#        ms, state = time_through(endpoint, host)
+#        return eid, key, {"label": label, "ms": ms, "state": state}
+#
+#    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+#        for eid, key, res in pool.map(one, jobs):
+#            out.setdefault(eid, {})[key] = res
+#    return out
+#
+#
+#def note_exit_routes(exits, tunnels):
+#    """Where this relay reaches each exit: its tunnel's end when it has one,
+#    the exit itself when it does not, and the same for this relay's own exit -
+#    which is exit 0 wherever an exit is named."""
+#    routes = {}
+#    if (CFG or {}).get("EXIT_IP"):
+#        routes["0"] = (("127.0.0.1", 18443) if CFG.get("TUNNEL") == "backpack"
+#                       else (CFG["EXIT_IP"], 443))
+#    for eid, e in exits.items():
+#        routes[eid] = (("127.0.0.1", tunnels[eid][0]) if eid in (tunnels or {})
+#                       else (e["ip"], 443))
+#    with PING_LOCK:
+#        EXIT_ROUTES.clear()
+#        EXIT_ROUTES.update(routes)
+#    return routes
+#
+#
+#def take_exit_game_pings():
+#    with PING_LOCK:
+#        out = {eid: dict(games) for eid, games in EXIT_GAME_PINGS.items()}
+#        EXIT_GAME_PINGS.clear()
 #    return out
 #
 #
@@ -7170,6 +7326,9 @@ exit 0
 #    exit_pings = take_exit_pings()
 #    if exit_pings:
 #        report["exit_pings"] = exit_pings
+#    through = take_exit_game_pings()
+#    if through:
+#        report["exit_game_pings"] = through
 #    answer = post("/sync", report)
 #    note_ping_targets(answer.get("ping_targets"))
 #    exits = note_exit_targets(answer.get("exits"))
@@ -7210,6 +7369,10 @@ exit 0
 #        tunnels = apply_exit_tunnels(exits)
 #        apply_exits(exits, {a["ip"]: str(a.get("exit") or "")
 #                            for a in answer.get("allowed") or [] if a.get("ip")}, tunnels)
+#        # Where each exit is reached, for the next round of game pings: the
+#        # same endpoints nginx was just pointed at, so what is measured is
+#        # what customers are actually sent through.
+#        note_exit_routes(exits, tunnels)
 #    except Exception as e:
 #        log_exception("exits failed: %s" % e)
 #
@@ -10783,7 +10946,11 @@ exit 0
 #
 #
 #def game_ping(game):
-#    """(fastest ms, "ok") for a game, or (None, "filtered" | "no-answer")."""
+#    """(fastest ms, "ok") for a game, or (None, "filtered" | "no-answer").
+#
+#    Takes the same shape whether the hosts were measured from the relay itself
+#    or one of them through an exit, so one line-drawing function serves both.
+#    """
 #    hosts = game.get("hosts") or []
 #    times = [h["ms"] for h in hosts if isinstance(h, dict) and isinstance(h.get("ms"), (int, float))]
 #    if times:
@@ -11208,7 +11375,30 @@ exit 0
 #                 self.menu(chat))
 #
 #    def pings(self, chat, user):
-#        self.say(chat, self.ping_text(detail=False), self.menu(chat))
+#        """What the games answer like for this customer - through the exit they
+#        are on, which is the path their own traffic takes."""
+#        user = self.store.one("SELECT * FROM users WHERE id = ?", (user["id"],))
+#        names = self.exit_names()
+#        active = {eid: True for eid in names if eid != "0"}
+#        eid = P.resolve_exit(user["exit_id"], P.fresh_exit_pings(self.store), active)
+#        games, seen = P.games_through_exit(self.store, eid)
+#        if not games:
+#            # No round through that exit yet - the relay's own numbers are
+#            # still worth showing, and they say where they come from.
+#            return self.say(chat, self.ping_text(detail=False), self.menu(chat))
+#        lines = ["📶 پینگ بازی‌ها — از راه %s" % names.get(eid, "سرور خروجی"), ""]
+#        order = sorted(games.values(), key=lambda g: (not isinstance(g.get("ms"), (int, float)),
+#                                                      g.get("ms") or 0, g.get("label") or ""))
+#        for g in order:
+#            lines.append(ping_line({"label": g.get("label"), "hosts": [g]}))
+#        lines.append("")
+#        if seen:
+#            age = int((datetime.now(timezone.utc) - seen).total_seconds() // 60)
+#            lines.append("⏱ %s" % ("همین حالا" if age < 1 else "%d دقیقه پیش" % age))
+#        lines.append("این پینگ از سرور ایران تا خود بازی است، از همان راهی که ترافیک شما "
+#                     "می‌رود. بازی آنلاین مستقیم از اینترنت شما وصل می‌شود، پس پینگ شما "
+#                     "ممکن است کمی فرق کند.")
+#        self.say(chat, "\n".join(lines), self.menu(chat))
 #
 #    def ping_text(self, detail):
 #        """The latest game pings the relays measured.
@@ -11871,7 +12061,25 @@ exit 0
 #
 #    # game pings
 #    def admin_pings(self, chat):
+#        """Every host as the relay reaches it directly - which is what shows
+#        Iran's own blocks - and then each game through each exit, which is what
+#        customers get."""
 #        self.say(chat, self.ping_text(detail=True))
+#        names = self.exit_names()
+#        for eid in sorted(names, key=lambda e: int(e)):
+#            games, seen = P.games_through_exit(self.store, eid)
+#            if not games:
+#                continue
+#            lines = ["📶 از راه %s" % names[eid], ""]
+#            for g in sorted(games.values(),
+#                            key=lambda g: (not isinstance(g.get("ms"), (int, float)),
+#                                           g.get("ms") or 0, g.get("label") or "")):
+#                lines.append(ping_line({"label": g.get("label"), "hosts": [g]}))
+#            if seen:
+#                age = int((datetime.now(timezone.utc) - seen).total_seconds() // 60)
+#                lines.append("")
+#                lines.append("⏱ %s" % ("همین حالا" if age < 1 else "%d دقیقه پیش" % age))
+#            self.say(chat, "\n".join(lines))
 #
 #    # the free trial
 #    def admin_trial(self, chat):
