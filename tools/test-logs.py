@@ -117,7 +117,7 @@ check("a relay's report is written", r.returncode == 0 and "report written" in r
       r.stdout + r.stderr)
 check("and says what it holds", "IP addresses and usernames" in r.stdout, r.stdout)
 check("it has the header and both halves",
-      "doctor dns report - relay" in body and "warnings and errors" in body
+      "Fasty DNS report - relay" in body and "warnings and errors" in body
       and "recent logs" in body, body[:500])
 check("a relay's includes its routing", "ROUTING-SUMMARY" in body, body[:800])
 check("the sync secret leaked into the log is masked",

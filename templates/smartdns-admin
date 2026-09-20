@@ -55,6 +55,8 @@ LOCKOUT_SECONDS = 900
 # The database is small - a few hundred kilobytes - so this is a ceiling on
 # nonsense rather than a real limit on backups.
 MAX_UPLOAD = 64 * 1024 * 1024
+# Where the installer puts the panel's two faces.
+FONT_DIR = "/usr/local/share/smart-dns/fonts"
 
 
 def systemctl(*args):
@@ -309,87 +311,120 @@ def catalogue_now():
 
 # -------------------------------------------------------------------- pages
 CSS = """
+/* Fasty DNS brand system: void #07080A, signal #C7F000, 1px lines, no radius.
+   Both faces are served by this panel itself - see send_font. Persian text
+   falls through to the device's own face; Latin and every numeral are the
+   brand's, which is where the system is strictest. */
+@font-face{font-family:'Space Grotesk';src:url(f/space.woff2) format('woff2');
+ font-weight:300 700;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url(f/mono.woff2) format('woff2');
+ font-weight:400 800;font-style:normal;font-display:swap}
+:root{--void:#07080A;--surface:#0D0F12;--raised:#14171C;--line:#23272E;
+ --line2:#35404A;--dim:#646B76;--muted:#9AA1AC;--text:#EDEFF2;--signal:#C7F000;
+ --pressed:#8BA800;--wash:#1F2610;--warn:#FFB020;--warn-wash:#2A2110;
+ --fail:#FF4D3D;--fail-wash:#2A1414}
 *{box-sizing:border-box}
-body{margin:0;background:#0f1115;color:#e6e8eb;font:14px/1.7 system-ui,'Segoe UI',Tahoma,sans-serif}
-a{color:#7dd3a0;text-decoration:none}
-.wrap{max-width:1000px;margin:0 auto;padding:24px}
+body{margin:0;background:var(--void);color:var(--text);
+ font:15px/1.6 'Space Grotesk',Vazirmatn,Tahoma,system-ui,sans-serif}
+a{color:var(--signal);text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 32px}
 header{display:flex;align-items:center;justify-content:space-between;
- border-bottom:1px solid #262b36;padding-bottom:14px;margin-bottom:22px;flex-wrap:wrap;gap:12px}
-h1{font-size:18px;margin:0;font-weight:600}
-nav a{margin-left:16px;color:#9aa4b2;font-size:14px}
-nav a.on{color:#7dd3a0;font-weight:600}
-.card{background:#171a21;border:1px solid #262b36;border-radius:12px;padding:18px;margin-bottom:16px}
-.card h2{font-size:15px;margin:0 0 14px;font-weight:600;color:#c9d1d9}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:right;color:#8b949e;font-weight:500;padding:8px 6px;border-bottom:1px solid #262b36}
-td{padding:9px 6px;border-bottom:1px solid #1c2029}
+ border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:24px;
+ flex-wrap:wrap;gap:12px}
+h1{font-size:22px;margin:0;font-weight:600;letter-spacing:-.02em}
+nav a{margin-left:20px;color:var(--muted);font-size:14px;
+ transition:color .12s ease-out}
+nav a:hover{color:var(--text)}
+nav a.on{color:var(--signal);font-weight:600}
+.card{background:var(--surface);border:1px solid var(--line);padding:20px;
+ margin-bottom:20px}
+.card h2{font-size:17px;margin:0 0 14px;font-weight:600;color:var(--text)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:right;color:var(--dim);font-weight:500;padding:9px 8px;
+ border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.16em;
+ text-transform:uppercase;font-family:'JetBrains Mono',ui-monospace,monospace}
+td{padding:10px 8px;border-bottom:1px solid var(--line)}
 tr:last-child td{border-bottom:0}
-code{background:#0f1115;padding:2px 6px;border-radius:5px;color:#7dd3a0;font-size:12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
-.stat{background:#0f1115;border:1px solid #262b36;border-radius:10px;padding:14px}
-.stat .n{font-size:21px;font-weight:600}
-.stat .l{color:#8b949e;font-size:12px;margin-top:3px}
-.bar{height:6px;background:#0f1115;border-radius:3px;overflow:hidden;margin-top:7px}
-.bar i{display:block;height:100%;background:#7dd3a0}
-.bar i.warn{background:#e3b341}
-.bar i.hot{background:#f85149}
-input,select,button,textarea{font:inherit;background:#0f1115;color:#e6e8eb;
- border:1px solid #30363d;border-radius:7px;padding:8px 10px}
-button{background:#238636;border-color:#238636;cursor:pointer;font-weight:600}
-button:hover{background:#2ea043}
-button.danger{background:#6e2c2c;border-color:#6e2c2c}
-button.ghost{background:transparent;border-color:#30363d;color:#9aa4b2;font-weight:400}
+code{background:var(--void);border:1px solid var(--line);padding:2px 7px;
+ color:var(--text);font-size:13px;
+ font-family:'JetBrains Mono',ui-monospace,monospace;direction:ltr;
+ unicode-bidi:isolate}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;
+ background:var(--line);border:1px solid var(--line)}
+.stat{background:var(--surface);padding:20px}
+.stat .n{font-size:30px;font-weight:500;letter-spacing:-.03em;
+ font-family:'JetBrains Mono',ui-monospace,monospace;direction:ltr;
+ unicode-bidi:isolate}
+.stat .l{color:var(--dim);font-size:10px;margin-top:6px;letter-spacing:.16em;
+ text-transform:uppercase;font-family:'JetBrains Mono',ui-monospace,monospace}
+.bar{height:6px;background:var(--void);border:1px solid var(--line);margin-top:7px}
+.bar i{display:block;height:100%;background:var(--signal)}
+.bar i.warn{background:var(--warn)}
+.bar i.hot{background:var(--fail)}
+input,select,button,textarea{font:inherit;background:var(--void);color:var(--text);
+ border:1px solid var(--line);padding:10px 12px;min-height:38px;
+ transition:background .12s ease-out,border-color .12s ease-out,color .12s ease-out}
+input,textarea{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:14px}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--signal)}
+button{background:var(--signal);border-color:var(--signal);color:var(--void);
+ cursor:pointer;font-weight:600}
+button:hover{background:#D9FF3A;border-color:#D9FF3A}
+button:active{background:var(--pressed);border-color:var(--pressed)}
+button.danger{background:var(--fail-wash);border-color:var(--fail);color:var(--fail)}
+button.danger:hover{background:var(--fail);border-color:var(--fail);color:var(--void)}
+button.ghost{background:transparent;border-color:var(--line2);color:var(--text);
+ font-weight:500}
+button.ghost:hover{background:transparent;border-color:var(--signal);color:var(--signal)}
 form.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.muted{color:#8b949e;font-size:12px}
-.ok{color:#7dd3a0}.bad{color:#f85149}.warn{color:#e3b341}
-.msg{padding:11px 14px;border-radius:9px;margin-bottom:16px;font-size:13px}
-.msg.good{background:#12261a;border:1px solid #238636}
-.msg.err{background:#2b1416;border:1px solid #6e2c2c}
-label{display:block;color:#8b949e;font-size:12px;margin-bottom:5px}
-.f{margin-bottom:12px}
-.login{max-width:340px;margin:14vh auto}
-.receipt{border:1px solid #262b36;border-radius:10px;padding:14px;
- margin-bottom:14px;background:#0f1115}
-.receipt .who{font-size:14px;font-weight:600;margin-bottom:10px}
-.receipt img{max-width:100%;max-height:420px;border-radius:8px;
- border:1px solid #262b36;display:block}
+.muted{color:var(--dim);font-size:13px}
+.ok{color:var(--signal)}.bad{color:var(--fail)}.warn{color:var(--warn)}
+.msg{padding:11px 14px;margin-bottom:16px;font-size:14px;border:1px solid var(--line)}
+.msg.good{background:var(--wash);border-color:var(--signal)}
+.msg.err{background:var(--fail-wash);border-color:var(--fail)}
+label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
+.f{margin-bottom:14px}
+.login{max-width:360px;margin:14vh auto}
+.receipt{border:1px solid var(--line);padding:16px;margin-bottom:16px;
+ background:var(--void)}
+.receipt .who{font-size:15px;font-weight:600;margin-bottom:10px}
+.receipt img{max-width:100%;max-height:420px;border:1px solid var(--line);display:block}
 td.acts{white-space:nowrap}
 td.acts form{display:inline}
-td.acts button{padding:6px 10px;font-size:12px;margin-right:4px}
-a.dl{display:inline-block;background:#238636;color:#fff;font-weight:600;
- padding:9px 16px;border-radius:7px;text-decoration:none}
-a.dl:hover{background:#2ea043}
+td.acts button{padding:7px 11px;font-size:12px;margin-right:4px;min-height:34px}
+a.dl{display:inline-block;background:var(--signal);color:var(--void);font-weight:600;
+ padding:11px 18px;text-decoration:none;min-height:44px}
+a.dl:hover{background:#D9FF3A}
 .svc{display:inline-block;margin:0 0 8px 14px}
-.svc label{display:inline;color:#e6e8eb;font-size:13px}
-details.svc{display:block;margin:0 0 6px;border:1px solid #262b36;border-radius:9px;
- background:#0f1115}
-details.svc>summary{padding:9px 12px;cursor:pointer;list-style:none;
+.svc label{display:inline;color:var(--text);font-size:14px}
+details.svc{display:block;margin:0 0 6px;border:1px solid var(--line);
+ background:var(--void)}
+details.svc>summary{padding:10px 12px;cursor:pointer;list-style:none;
  display:flex;align-items:center;gap:10px}
 details.svc>summary::-webkit-details-marker{display:none}
-details.svc>summary::before{content:'▸';color:#8b949e;font-size:11px;
- transition:transform .12s}
-details.svc[open]>summary::before{transform:rotate(-90deg)}
-details.svc[open]{border-color:#30363d}
+details.svc>summary::before{content:'▸';color:var(--dim);font-size:11px}
+details.svc[open]>summary::before{content:'▾'}
+details.svc[open]{border-color:var(--line2)}
 details.svc>summary label{flex:1}
 .doms{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));
- gap:2px 14px;padding:4px 30px 12px;border-top:1px solid #1c2029;margin-top:2px}
-.doms label{display:flex;align-items:center;gap:7px;color:#9aa4b2;font-size:12px;
- font-family:ui-monospace,Consolas,monospace;margin:0;padding:2px 0}
+ gap:2px 14px;padding:4px 30px 12px;border-top:1px solid var(--line);margin-top:2px}
+.doms label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;
+ font-family:'JetBrains Mono',ui-monospace,monospace;margin:0;padding:2px 0}
 .doms label span{direction:ltr;overflow:hidden;text-overflow:ellipsis;
  white-space:nowrap}
-.doms input{margin:0}
-.optin{display:block;font-size:11px;color:#e3b341;font-weight:400;margin-top:2px}
+.doms input{margin:0;min-height:0}
+.optin{display:block;font-size:11px;color:var(--warn);font-weight:400;margin-top:2px}
 .pick{margin-right:auto;display:flex;gap:6px}
-.pick button{padding:3px 10px;font-size:11px;font-weight:400;
- background:transparent;border:1px solid #30363d;color:#8b949e}
-.pick button:hover{background:#1c2029}
-.brand{text-align:center;margin:4px 0 26px;direction:ltr;line-height:1.15}
-.brand .mark{font-size:clamp(28px,6vw,38px);vertical-align:middle;margin-right:10px}
-.brand .name{display:inline-block;vertical-align:middle;font-size:clamp(34px,8vw,50px);
- font-weight:800;letter-spacing:1.5px;color:#7dd3a0;
- background:linear-gradient(90deg,#7dd3a0,#58a6ff);-webkit-background-clip:text;
- background-clip:text;-webkit-text-fill-color:transparent}
-footer{text-align:center;color:#6e7681;font-size:12px;padding:26px 0 6px;direction:ltr}
+.pick button{padding:4px 10px;font-size:11px;font-weight:500;min-height:0;
+ background:transparent;border:1px solid var(--line);color:var(--muted)}
+.pick button:hover{background:var(--raised);border-color:var(--line2);color:var(--text)}
+.brand{display:flex;align-items:center;gap:10px;margin:0 0 20px;direction:ltr}
+.brand svg{display:block}
+.brand .name{font-size:20px;font-weight:700;letter-spacing:-.025em;color:var(--text)}
+.brand .dns{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;
+ font-weight:500;letter-spacing:.22em;color:var(--muted)}
+footer{text-align:center;color:var(--dim);font-size:11px;padding:26px 0 6px;
+ direction:ltr;font-family:'JetBrains Mono',ui-monospace,monospace;
+ letter-spacing:.16em;text-transform:uppercase}
 """
 
 # Where the installer writes the version it installed. Read per page rather
@@ -405,14 +440,27 @@ def app_version():
         return ""
 
 
+# The mark, drawn rather than fetched, on the brand's own 44x44 grid.
+MARK = ("<svg viewBox='0 0 44 44' width='%d' height='%d' aria-hidden='true'>"
+        "<rect width='44' height='44' rx='11' fill='#C7F000'/>"
+        "<path d='M12 14 L20 22 L12 30' stroke='#07080A' stroke-width='3.4'"
+        " stroke-linecap='square' fill='none'/>"
+        "<path d='M23 14 L31 22 L23 30' stroke='#07080A' stroke-width='3.4'"
+        " stroke-linecap='square' fill='none'/></svg>")
+FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 44'"
+           "%3E%3Crect width='44' height='44' rx='11' fill='%23C7F000'/%3E%3Cpath d='M12 14"
+           " L20 22 L12 30' stroke='%2307080A' stroke-width='3.4' fill='none'/%3E%3Cpath"
+           " d='M23 14 L31 22 L23 30' stroke='%2307080A' stroke-width='3.4' fill='none'/%3E%3C/svg%3E")
+
+
 def brand_html():
-    return ("<div class='brand'><span class='mark'>🩺</span>"
-            "<span class='name'>doctor dns</span></div>")
+    return ("<div class='brand'>%s<span class='name'>Fasty</span>"
+            "<span class='dns'>DNS</span></div>" % (MARK % (26, 26)))
 
 
 def footer_html():
     v = app_version()
-    return "<footer>doctor dns%s</footer>" % (" v" + html.escape(v) if v else "")
+    return "<footer>FASTY DNS%s</footer>" % (" · v" + html.escape(v) if v else "")
 
 
 def page(title, body, cfg, active="", msg=None, msg_kind="good"):
@@ -427,10 +475,10 @@ def page(title, body, cfg, active="", msg=None, msg_kind="good"):
         banner = "<div class='msg %s'>%s</div>" % (msg_kind, html.escape(msg))
     return ("""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:,">
+<link rel="icon" href="%s">
 <title>%s</title><style>%s</style></head><body><div class="wrap">%s
 <header><h1>%s</h1><nav>%s<a href='/%s/logout'>خروج</a></nav></header>
-%s%s%s</div></body></html>""" % (html.escape(title), CSS, brand_html(),
+%s%s%s</div></body></html>""" % (html.escape(title), FAVICON, CSS, brand_html(),
                                  html.escape(title), nav, cfg["ADMIN_PATH"],
                                  banner, body, footer_html()))
 
@@ -442,15 +490,15 @@ def login_page(cfg, error=None):
     # which after a bookmark to a page that has moved is not the panel.
     return """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:,">
+<link rel="icon" href="%s">
 <title>ورود</title><style>%s</style></head><body><div class="wrap">%s
 <div class="login" style="margin-top:6vh">
 <div class="card"><h2>پنل مدیریت</h2>%s
 <form method="post" action="/%s/"><div class="f"><label>رمز عبور</label>
 <input type="password" name="password" autofocus style="width:100%%"></div>
 <button type="submit" style="width:100%%">ورود</button></form></div>
-</div>%s</div></body></html>""" % (CSS, brand_html(), err, cfg["ADMIN_PATH"],
-                                   footer_html())
+</div>%s</div></body></html>""" % (FAVICON, CSS, brand_html(), err,
+                                   cfg["ADMIN_PATH"], footer_html())
 
 
 def bar(used, total):
@@ -677,6 +725,23 @@ class Admin(http.server.BaseHTTPRequestHandler):
         return urllib.parse.parse_qs(raw, keep_blank_values=True)
 
     # -- backup and restore ----------------------------------------------
+    def send_font(self, name):
+        """One of the two faces this panel is drawn in.
+
+        Before the session check on purpose: the sign-in page is drawn in them
+        too, and a font is not a secret. Cached for a year - the files change
+        only when the installer replaces them, under the same names.
+        """
+        if name not in ("space.woff2", "mono.woff2"):
+            return self.lost()
+        try:
+            with open(os.path.join(FONT_DIR, name), "rb") as fh:
+                blob = fh.read()
+        except OSError:
+            return self.lost()
+        return self.send(blob, 200, {"Content-Type": "font/woff2",
+                                     "Cache-Control": "public, max-age=31536000, immutable"})
+
     def send_backup(self):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         # Beside the database rather than in /tmp: the unit sets PrivateTmp, so
@@ -988,6 +1053,8 @@ class Admin(http.server.BaseHTTPRequestHandler):
                 STORE.run("DELETE FROM admin_sessions WHERE token = ?",
                           (cookie["sdns"].value,))
             return self.redirect("", {"Set-Cookie": "sdns=; Max-Age=0; Path=/"})
+        if rest.startswith("f/"):
+            return self.send_font(rest[len("f/"):])
         if not self.session_ok():
             return self.send(login_page(CFG))
         if rest == "backup.db":

@@ -303,12 +303,12 @@ check("an expired session gets the 404, not the panel",
 check("and is deleted on the way",
       admin.STORE.one("SELECT 1 x FROM admin_sessions WHERE token='stale'") is None)
 
-print("the pages tell the browser there is no favicon to fetch")
+print("the pages carry the mark as their icon")
 src = open(os.path.join(HERE, "..", "templates", "smartdns-admin"),
            encoding="utf-8").read()
-check("both the panel and the login page say so",
-      src.count('rel="icon" href="data:,"') == 2,
-      str(src.count('rel="icon" href="data:,"')))
+check("both the panel and the login page carry it",
+      src.count('rel="icon" href="%s"') == 2 and "%23C7F000" in src,
+      str(src.count('rel="icon" href="%s"')))
 check("the login form posts to a fixed address",
       'action="/%s/"' in src)
 

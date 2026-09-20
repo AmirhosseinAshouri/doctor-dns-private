@@ -1,5 +1,5 @@
 [Unit]
-Description=doctor dns tunnel between the relay and the exit (BackPack)
+Description=Fasty DNS tunnel between the relay and the exit (BackPack)
 After=network-online.target
 Wants=network-online.target
 

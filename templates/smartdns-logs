@@ -55,7 +55,7 @@ elif [ -f "$ETC/exit.env" ]; then
     status="nginx"
     logs="nginx"
 else
-    echo "doctor dns is not installed on this machine" >&2
+    echo "Fasty DNS is not installed on this machine" >&2
     exit 1
 fi
 # The tunnel, on either side, when the installer set one up.
@@ -96,7 +96,7 @@ if [ -n "$report" ]; then
     out="${SMARTDNS_REPORT_DIR:-/tmp}/doctor-dns-report-$role-$(date -u +%Y%m%d-%H%M%S).txt"
     umask 077
     {
-        echo "doctor dns report - $role - $(date -u '+%F %T') UTC"
+        echo "Fasty DNS report - $role - $(date -u '+%F %T') UTC"
         echo "version  $(cat /var/lib/smart-dns/version 2>/dev/null || echo '?')"
         echo "system   $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-?}"), kernel $(uname -r)"
         echo "up       $(uptime -p 2>/dev/null || echo '?')"
@@ -136,7 +136,7 @@ if [ "$follow" = yes ]; then
     exec journalctl "${args[@]}" ${prio[@]+"${prio[@]}"} -f -n 20 --no-pager -o short-iso
 fi
 
-printf 'doctor dns %s - %s\n' \
+printf 'Fasty DNS %s - %s\n' \
        "$(cat /var/lib/smart-dns/version 2>/dev/null || echo '?')" "$role"
 echo
 echo "== services"

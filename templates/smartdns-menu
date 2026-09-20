@@ -1,5 +1,5 @@
 #!/bin/bash
-# smartdns-menu - every doctor dns command in one place, for when you do not
+# smartdns-menu - every Fasty DNS command in one place, for when you do not
 # remember the name of the one you want.
 #
 # usage: sudo smartdns-menu
@@ -26,7 +26,7 @@ esac
 if [ -f "$ETC/sync.env" ]; then role=relay
 elif [ -f "$ETC/panel.env" ]; then role=exit
 elif [ -f "$ETC/exit.env" ]; then role=extra
-else echo "doctor dns is not installed on this machine" >&2; exit 1; fi
+else echo "Fasty DNS is not installed on this machine" >&2; exit 1; fi
 VERSION="$(cat "$VERSION_FILE" 2>/dev/null || echo '?')"
 
 # ------------------------------------------------------------------ helpers
@@ -136,7 +136,7 @@ update() {
 
 uninstall() {
     local a
-    printf '  %sThis removes doctor dns from this machine.%s type uninstall to go ahead: ' "$Y" "$N"
+    printf '  %sThis removes Fasty DNS from this machine.%s type uninstall to go ahead: ' "$Y" "$N"
     read -r a || exit 0
     [ "$a" = uninstall ] && installer --uninstall
 }
@@ -216,7 +216,7 @@ menu_install() {
         "the version installed here: $VERSION   (doctor-dns.sh --version)|printf '\n  %s\n' \"\$VERSION\"; pause" \
         'update from a new copy in /root|update' \
         'get or renew a certificate   (smartdns-cert)|ask "domain" && run smartdns-cert "$REPLY"' \
-        'remove doctor dns from this machine   (doctor-dns.sh --uninstall)|uninstall'
+        'remove Fasty DNS from this machine   (doctor-dns.sh --uninstall)|uninstall'
 }
 
 restart_all() {
@@ -255,7 +255,7 @@ main() {
             'installation, updates and certificates|menu_install'
         )
     fi
-    BACK=quit choose "doctor dns $VERSION - $role" "${items[@]}"
+    BACK=quit choose "Fasty DNS $VERSION - $role" "${items[@]}"
 }
 
 main

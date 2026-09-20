@@ -32,7 +32,7 @@ elif [ -f "$ETC/panel.env" ]; then role=exit; env="$ETC/panel.env"
 elif [ -f "$ETC/exit.env" ]; then
     echo "an extra exit has no tunnel - the relay reaches it directly; only the main exit has one."
     exit 0
-else echo "doctor dns is not installed on this machine" >&2; exit 1; fi
+else echo "Fasty DNS is not installed on this machine" >&2; exit 1; fi
 
 get() { sed -n "s/^$1=//p" "$env" 2>/dev/null | head -1; }
 set_key() {
