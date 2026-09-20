@@ -595,15 +595,24 @@ Buying renews. The allowance becomes the plan's, usage starts from zero and the
 period counts from that day. A plan can carry a template, which the account is
 moved to.
 
-**Game pings.** Every five minutes the relay times a connection to a few of
-each game's domains - the same ones its DNS list routes - and the bot shows the
-result: customers see one line per game, the admin sees every host, its
-address and its loss, and which relay measured. It is the Iranian server's
-ping, not the customer's: a game's match traffic goes straight from their own
-internet to the game, not through the relay. It is still the best guide to
-which games answer well from Iran, and which Iran filters outright. TCP
-connections are timed rather than ICMP pings, because many game servers ignore
-ping; names are looked up at public resolvers, not the relay's own DNS.
+**Game pings.** Every five minutes the relay measures each game twice over.
+
+*Directly*, by timing a connection to a few of each game's domains - the same
+ones its DNS list routes. That is what shows which names Iran filters outright,
+which no route around it changes, and it is yours to read in **🛠 مدیریت →
+📶 پینگ**, host by host with each one's address and loss.
+
+*Through every exit*, by opening a connection to the exit's proxy with the
+game's name in it, exactly as a customer's traffic does - so the whole path is
+timed, the tunnel included where there is one. Customers see that one: under
+**📶 پینگ بازی‌ها** each game is shown as it answers through **the exit they
+are on**, and the message says so. Until a round through their exit has run,
+they see the direct numbers instead.
+
+It is still the server's ping, not the customer's: a game's match traffic goes
+straight from their own internet to the game, not through any of this. TCP and
+TLS are timed rather than ICMP pings, because many game servers ignore ping;
+names are looked up at public resolvers, not the relay's own DNS.
 
 ### What the operator can do
 

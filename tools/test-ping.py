@@ -11,7 +11,9 @@ import json
 import os
 import shutil
 import socket
+import ssl
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -49,6 +51,8 @@ sync = load("smartdns-sync", "sync")
 bot = load("smartdns-bot", "bot")
 bot.P = panel
 ROOT = os.path.join(HERE, "..")
+tmp = tempfile.mkdtemp()
+RELAY = "5.9.10.11"
 
 print("what gets pinged")
 catalogue = json.load(open(os.path.join(ROOT, "domains", "services.json"), encoding="utf-8"))["services"]
@@ -158,8 +162,71 @@ check("and only once", sync.take_pings() == {})
 check("it goes up with the sync report", 'report["pings"] = pings' in ssrc)
 check("and the pinging runs beside the sync", "target=ping_loop" in ssrc)
 
+print("and through each exit, the way a customer goes")
+# A TLS server on loopback stands in for an exit's proxy: what time_through
+# measures is a handshake completing, whatever is behind it.
+crt, key = os.path.join(tmp, "t.crt"), os.path.join(tmp, "t.key")
+subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                "-subj", "/CN=exit.test", "-keyout", key, "-out", crt],
+               capture_output=True, timeout=120)
+tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls_ctx.load_cert_chain(crt, key)
+tls_srv = socket.socket()
+tls_srv.bind(("127.0.0.1", 0))
+tls_srv.listen(32)
+EXIT_ENDPOINT = ("127.0.0.1", tls_srv.getsockname()[1])
+
+
+def serve_tls():
+    while True:
+        try:
+            raw, _ = tls_srv.accept()
+        except OSError:
+            return
+        try:
+            tls_ctx.wrap_socket(raw, server_side=True).close()
+        except OSError:
+            pass
+
+
+threading.Thread(target=serve_tls, daemon=True).start()
+sync.THROUGH_TIMEOUT = 5.0
+ms, state = sync.time_through(EXIT_ENDPOINT, "playstation.com")
+check("a game answering through an exit is timed", state == "ok" and ms is not None and ms < 5000,
+      "%r %r" % (ms, state))
+check("an exit that does not answer at all says so",
+      sync.time_through(("127.0.0.1", closed_port), "playstation.com") == (None, "no-exit"))
+check("an exit that answers but cannot reach the game says so",
+      sync.time_through(("127.0.0.1", srv.getsockname()[1]), "playstation.com")[1] == "no-answer")
+
+routes = {"0": EXIT_ENDPOINT, "3": EXIT_ENDPOINT}
+through = sync.ping_through_exits(
+    {"steam": {"label": "Steam", "hosts": ["steampowered.com", "steamcommunity.com"]},
+     "xbox": {"label": "Xbox", "hosts": ["xbox.com"]}}, routes)
+check("every exit is measured", set(through) == {"0", "3"})
+check("one host per game, not all of them",
+      set(through["0"]) == {"steam", "xbox"} and through["0"]["steam"]["ms"] is not None)
+check("under the game's name", through["3"]["xbox"]["label"] == "Xbox")
+
+sync.CFG = {"EXIT_IP": "5.10.20.30", "TUNNEL": "off"}
+r = sync.note_exit_routes({"3": {"name": "de", "ip": "91.107.1.2"}}, {})
+check("without tunnels, each exit is reached at its own address",
+      r == {"0": ("5.10.20.30", 443), "3": ("91.107.1.2", 443)}, str(r))
+r = sync.note_exit_routes({"3": {"name": "de", "ip": "91.107.1.2"}}, {"3": (18500, 18501)})
+check("a tunnelled exit is measured through its tunnel", r["3"] == ("127.0.0.1", 18500))
+sync.CFG["TUNNEL"] = "backpack"
+r = sync.note_exit_routes({}, {})
+check("and so is the relay's own exit, when the pair has one", r["0"] == ("127.0.0.1", 18443))
+sync.CFG["TUNNEL"] = "off"
+with sync.PING_LOCK:
+    sync.EXIT_GAME_PINGS.update(through)
+check("a finished round goes up with the sync once", sync.take_exit_game_pings() == through
+      and sync.take_exit_game_pings() == {})
+check("it is reported", 'report["exit_game_pings"] = through' in ssrc)
+check("and measured against the endpoints nginx was pointed at",
+      "note_exit_routes(exits, tunnels)" in ssrc)
+
 print("the exit keeps what each relay measured")
-tmp = tempfile.mkdtemp()
 store = panel.Store(os.path.join(tmp, "panel.db"))
 store.note_pings("5.9.10.11", res)
 kept = panel.relay_pings(store)
@@ -177,6 +244,22 @@ check("each relay keeps its own", set(panel.relay_pings(store)) == {"5.9.10.11",
 store.note_pings("5.9.10.12", "nonsense")
 check("nonsense changes nothing", set(panel.relay_pings(store)) == {"5.9.10.11", "5.9.10.12"})
 
+print("what the exit keeps of them")
+store.note_exit_game_pings(RELAY, {
+    "0": {"steam": {"label": "Steam", "ms": 120.0, "state": "ok"},
+          "xbox": {"label": "Xbox", "ms": None, "state": "no-answer"}},
+    "3": {"steam": {"label": "Steam", "ms": 44.0, "state": "ok"}},
+    "bad key": {"steam": {}}, "9": "junk"})
+games, seen = panel.games_through_exit(store, 3)
+check("what a game answers like through one exit", games["steam"]["ms"] == 44.0)
+check("with when it was measured", seen is not None)
+check("rubbish is dropped", panel.games_through_exit(store, "bad key")[0] == {})
+main_games, _ = panel.games_through_exit(store, 0)
+check("the main exit is kept apart", main_games["xbox"]["state"] == "no-answer")
+old = panel.exit_game_pings(store)
+old[RELAY]["at"] = "2000-01-01T00:00:00+00:00"
+store.set_setting("relay_exit_game_pings", json.dumps(old))
+check("an old round counts for nothing", panel.games_through_exit(store, 3) == ({}, None))
 print("what the bot shows")
 
 
@@ -224,6 +307,9 @@ MEASURED = {"5.9.10.11": {"at": panel.now(), "games": {
     "ea": {"label": "EA", "hosts": [
         {"host": "ea.com", "ip": "9.9.9.9", "ms": None, "loss": 1.0, "state": "no-answer"}]}}}}
 store.set_setting("relay_pings", json.dumps(MEASURED))
+# No round through an exit yet: what a customer sees until one has run is the
+# relay's own numbers, which is what the checks below are about.
+store.set_setting("relay_exit_game_pings", "")
 CUSTOMER, ADMIN = 8001, 8002
 update(CUSTOMER, "/start")
 check("customers have a ping button", bot.MENU_PING in json.dumps(b.menu(CUSTOMER), ensure_ascii=False))
@@ -248,18 +334,42 @@ store.set_setting("relay_pings", "")
 update(CUSTOMER, bot.MENU_PING)
 check("before any measurement, it says to wait", "هنوز" in last(CUSTOMER))
 
+print("and once a round through their exit has run")
+store.set_setting("relay_pings", json.dumps(MEASURED))
+store.note_exit_game_pings(RELAY, {
+    "0": {"steam": {"label": "Steam", "ms": 120.0, "state": "ok"},
+          "xbox": {"label": "Xbox", "ms": 61.0, "state": "ok"},
+          "riot": {"label": "Riot Games", "ms": None, "state": "no-answer"}}})
+update(CUSTOMER, bot.MENU_PING)
+text = last(CUSTOMER)
+check("the customer sees it through their own exit, named",
+      "از راه" in text and panel.main_exit_name(store) in text, text)
+check("with the numbers measured through it, not the relay's own",
+      "🟡 Steam — 120 ms" in text and "46 ms" not in text, text)
+check("the fastest through that exit comes first", text.index("Xbox") < text.index("Steam"))
+check("a game that did not answer through it is said to be", "⚫ Riot Games" in text)
+check("and it says whose path this is", "ترافیک شما" in text)
+
+
 store.set_setting("relay_pings", json.dumps(MEASURED))
 store.set_setting("bot_admins", str(ADMIN))
 update(ADMIN, bot.MENU_ADMIN)
 admin_menu = [p for m, p in tg.calls if m == "sendMessage" and p.get("chat_id") == ADMIN][-1]
 check("the admin menu has it", any(x.get("callback_data") == "a:pg"
                                    for row in admin_menu["reply_markup"]["inline_keyboard"] for x in row))
+before = len([p for m, p in tg.calls if m == "sendMessage" and p.get("chat_id") == ADMIN])
 press(ADMIN, "a:pg")
-text = last(ADMIN)
-check("the admin sees every host and its address", "steampowered.com" in text and "(5.6.7.8)" in text, text)
-check("with its loss", "33٪" in text)
-check("and which relay measured", "5.9.10.11" in text)
-check("hosts Iran filters are named", "فیلتر" in text)
+sent = [p.get("text") or "" for m, p in tg.calls
+        if m == "sendMessage" and p.get("chat_id") == ADMIN][before:]
+check("the admin gets the direct view, then one message per exit", len(sent) >= 2, str(len(sent)))
+direct = sent[0]
+check("the admin sees every host and its address",
+      "steampowered.com" in direct and "(5.6.7.8)" in direct, direct)
+check("with its loss", "33٪" in direct)
+check("and which relay measured", "5.9.10.11" in direct)
+check("hosts Iran filters are named", "فیلتر" in direct)
+check("and then what each game answers through each exit",
+      any("از راه" in m and "120 ms" in m for m in sent[1:]), str(sent[1:])[:200])
 press(CUSTOMER, "a:pg")
 check("a customer cannot open the admin view", "steampowered.com" not in last(CUSTOMER))
 
