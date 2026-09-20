@@ -40,6 +40,11 @@ if [ -f "$ETC/sync.env" ]; then
     role=relay
     status="smartdns-sync dnsmasq nginx coturn epic-pin.timer smartdns-acl-save.timer"
     logs="smartdns-sync dnsmasq nginx coturn epic-pin smartdns-acl-save"
+    # One tunnel per extra exit that has one, started by the sync agent.
+    for u in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+        status="$status $u"
+        logs="$logs $u"
+    done
     for f in /etc/smartdns-profiles/*.conf; do
         [ -e "$f" ] || continue
         status="$status smartdns-dns@$(basename "$f" .conf)"
@@ -50,7 +55,7 @@ elif [ -f "$ETC/panel.env" ]; then
     status="smartdns-panel smartdns-admin smartdns-bot nginx smartdns-cert.timer"
     logs="smartdns-panel smartdns-admin smartdns-bot nginx smartdns-cert"
 elif [ -f "$ETC/exit.env" ]; then
-    # An extra exit: nginx carrying traffic, and nothing else of ours.
+    # An extra exit: nginx carrying traffic, and its own tunnel when it has one.
     role=extra
     status="nginx"
     logs="nginx"

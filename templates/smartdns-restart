@@ -33,7 +33,7 @@ elif [ -f "$ETC/panel.env" ]; then
     units="smartdns-panel smartdns-admin smartdns-bot smartdns-tunnel nginx"
 elif [ -f "$ETC/exit.env" ]; then
     role=extra
-    units="nginx"
+    units="nginx smartdns-tunnel"
 else
     echo "Fasty DNS is not installed on this machine" >&2
     exit 1
@@ -75,6 +75,11 @@ fi
 # The tunnel, when there is one, before nginx: nginx falls back to the direct
 # path while it is down, so this order costs nobody a connection.
 installed smartdns-tunnel && restart smartdns-tunnel
+# The tunnels to extra exits, one instance per exit, on the relay.
+for u in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+    restart "$u"
+    units="$units $u"
+done
 # The same for nginx, which carries every customer's traffic.
 if out="$(nginx -t 2>&1)"; then
     restart nginx

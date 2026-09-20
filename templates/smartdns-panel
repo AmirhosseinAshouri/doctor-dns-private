@@ -320,6 +320,13 @@ MIGRATIONS = [
     # one with the lowest ping from the relay - 0 the main exit, and anything
     # else an extra exit's id.
     ("users", "exit_id", "INTEGER"),
+    # An extra exit's tunnel, as its own installer printed it: BackPack's
+    # transport and port, and the token both ends prove themselves with. Null
+    # on an exit the relay reaches directly, which is every exit until one is
+    # given a tunnel.
+    ("exits", "tunnel_transport", "TEXT"),
+    ("exits", "tunnel_port", "INTEGER"),
+    ("exits", "tunnel_token", "TEXT"),
 ]
 
 # Indexes that have to exist whether the table was created by SCHEMA or grown
@@ -1447,6 +1454,25 @@ def relay_pings(store):
 
 
 # ------------------------------------------------------------------ exits
+# What an extra exit's installer prints when it is given a tunnel, and what the
+# operator pastes into the bot: BackPack's transport and port, the direction
+# (always d - the relay dials an extra exit), and the token the two ends prove
+# themselves with. One line, so the two ends cannot be set up differently.
+EXIT_TUNNEL_TRANSPORTS = ("stealth", "wss", "tcp", "ws")
+EXIT_TUNNEL_RE = re.compile(r"^bp-([a-z]{2,10})-(\d{1,5})-d\.([0-9a-f]{16,64})$")
+
+
+def parse_exit_tunnel(line):
+    """(transport, port, token) from an extra exit's tunnel line, or None."""
+    m = EXIT_TUNNEL_RE.match((line or "").strip())
+    if not m:
+        return None
+    transport, port, token = m.group(1), int(m.group(2)), m.group(3)
+    if transport not in EXIT_TUNNEL_TRANSPORTS or not 1 <= port <= 65535:
+        return None
+    return transport, port, token
+
+
 def main_exit_name(store):
     return store.setting("main_exit_name", "") or "سرور اصلی"
 
@@ -1966,8 +1992,16 @@ class API(http.server.BaseHTTPRequestHandler):
             # account's own choice, or the fastest this relay measured. The
             # relay turns it into an nginx map. With no extra exits nothing is
             # sent, and every address takes the relay's own exit.
-            exits = {str(r["id"]): {"name": r["name"], "ip": r["ip"]}
-                     for r in self.store.active_exits()}
+            exits = {}
+            for r in self.store.active_exits():
+                e = {"name": r["name"], "ip": r["ip"]}
+                # The tunnel travels with the exit: the relay dials it, and
+                # this is the only place the two ends' settings come from.
+                if r["tunnel_transport"] and r["tunnel_port"] and r["tunnel_token"]:
+                    e["tunnel"] = {"transport": r["tunnel_transport"],
+                                   "port": int(r["tunnel_port"]),
+                                   "token": r["tunnel_token"]}
+                exits[str(r["id"])] = e
             if exits:
                 measured = fresh_exit_pings(self.store, self.client_address[0])
                 choices = {r["id"]: r["exit_id"] for r in self.store.q(

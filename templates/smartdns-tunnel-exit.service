@@ -1,0 +1,19 @@
+[Unit]
+Description=Fasty DNS tunnel to an extra exit (BackPack) - %i
+After=network-online.target
+Wants=network-online.target
+# One instance per extra exit that has a tunnel, started and stopped by the
+# sync agent as the panel's list of exits changes. This relay always dials:
+# the exit listens, so there is no port to open here and no rule to hold.
+PartOf=smartdns-sync.service
+
+[Service]
+ExecStart=/usr/local/lib/smart-dns/backpack -c /etc/smart-dns/tunnel/%i.toml
+Restart=always
+RestartSec=5
+# Every customer connection is a stream in the tunnel, and a console download
+# opens dozens at once.
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

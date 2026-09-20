@@ -216,6 +216,7 @@ tunnel_port_problem() {
         "$TUNNEL_LOCAL_HTTPS"|"$TUNNEL_LOCAL_HTTP") echo "the tunnel's own end on the relay" ;;
     esac
     { [ "$p" -ge 5300 ] && [ "$p" -le 5399 ]; } && echo "the templates' resolvers on the relay"
+    { [ "$p" -ge 18500 ] && [ "$p" -le 18599 ]; } && echo "the relay's ends of the extra exits' tunnels"
     admin="$(sed -n 's/^ADMIN_PORT=//p' /etc/smart-dns/admin.env 2>/dev/null | head -1 || true)"
     [ -n "$admin" ] && [ "$p" = "$admin" ] && echo "the admin panel"
     return 0
@@ -237,6 +238,47 @@ parse_tunnel_spec() {
 # Both ends derive the tunnel's token from the secret they already share, so
 # there is nothing new to copy between them.
 tunnel_token() { printf 'doctor-dns-tunnel:%s' "$1" | sha256sum | cut -c1-48; }
+
+# An extra exit's tunnel. Shorter than the pair's: the relay always dials an
+# extra exit, so there is no direction to choose and no port to open on the
+# relay - only what to speak, and on which port this machine listens.
+ask_exit_tunnel() {
+    local a t i=0 why
+    printf '\n%sTunnel between the relay and this exit%s (optional)\n\n' "$B" "$N"
+    printf '  Plain TCP is the fastest path and shows the name of every site on the\n'
+    printf '  way. A tunnel hides them, which some routes into Iran need.\n\n'
+    printf '  1) no tunnel - plain TCP\n'
+    printf '  2) BackPack tunnel\n\n'
+    read -r -p "  choice [1/2] [1]: " a
+    case "${a:-1}" in
+        2|backpack|tunnel) ;;
+        *) TUNNEL=off; return 0 ;;
+    esac
+    TUNNEL=backpack
+    TUNNEL_DIRECTION=direct
+    printf '\n  Which transport? stealth is encrypted and looks like random bytes;\n'
+    printf '  wss looks like an ordinary HTTPS site; tcp and ws are not encrypted,\n'
+    printf '  so the names still show. Try one or two - it depends on the route.\n\n'
+    for t in $TUNNEL_DIRECT_TRANSPORTS; do
+        i=$((i + 1)); printf '  %d) %s\n' "$i" "$t"
+    done
+    printf '\n'
+    read -r -p "  choice [1]: " a
+    i=0
+    TUNNEL_TRANSPORT=stealth
+    for t in $TUNNEL_DIRECT_TRANSPORTS; do
+        i=$((i + 1)); [ "${a:-1}" = "$i" ] && TUNNEL_TRANSPORT="$t"
+    done
+    while :; do
+        printf '\n'
+        read -r -p "  port the relay dials on this machine [8444]: " a
+        a="${a:-8444}"
+        why="$(tunnel_port_problem "$a")"
+        [ -z "$why" ] && { TUNNEL_PORT="$a"; break; }
+        warn "port $a cannot carry the tunnel: $why"
+    done
+    info "open port $TUNNEL_PORT to the relay in this machine's firewall, if it has one"
+}
 
 ask_tunnel() {
     local a list="" i=0 t note
@@ -542,6 +584,11 @@ uninstall() {
 
     step "Stopping services"
     local svc
+    # The per-exit tunnels are started by the sync agent, not by this script,
+    # so they are not on the list below.
+    for svc in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+        systemctl disable --now "$svc" >/dev/null 2>&1 || true
+    done
     for svc in $(recall services-enabled); do
         systemctl stop "$svc" 2>/dev/null || true
         systemctl disable "$svc" >/dev/null 2>&1 || true
@@ -901,7 +948,6 @@ env_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1 || true; }
 # --tunnel: ask again on a machine that is already set up. The exit shows the
 # menu with what it has now as the defaults; the relay asks for the exit's new
 # pairing token, which carries the answer.
-# An extra exit has no tunnel: that runs between a relay and its main exit.
 if [ -n "${ASK_TUNNEL:-}" ] && [ -z "$TUNNEL" ] && [ "$ROLE" != extra ]; then
     if [ "$ROLE" = exit ]; then
         CUR_TUNNEL="$(env_get /etc/smart-dns/panel.env TUNNEL)"
@@ -940,6 +986,20 @@ if [ -z "$TUNNEL" ]; then
 fi
 if [ "$ROLE" = exit ] && [ -z "$TUNNEL" ] && [ -z "${ASSUME_YES:-}" ] && [ -z "$UPGRADE" ]; then
     ask_tunnel
+fi
+# An extra exit keeps its own: the relay learns it from the line printed at the
+# end of this run, which the operator pastes into the bot with the exit.
+if [ "$ROLE" = extra ]; then
+    if [ -z "$TUNNEL" ] && [ -f /etc/smart-dns/exit.env ]; then
+        TUNNEL="$(env_get /etc/smart-dns/exit.env TUNNEL)"
+        TUNNEL_TRANSPORT="${TUNNEL_TRANSPORT:-$(env_get /etc/smart-dns/exit.env TUNNEL_TRANSPORT)}"
+        TUNNEL_PORT="${TUNNEL_PORT:-$(env_get /etc/smart-dns/exit.env TUNNEL_PORT)}"
+        TUNNEL_SECRET="${TUNNEL_SECRET:-$(env_get /etc/smart-dns/exit.env TUNNEL_SECRET)}"
+    fi
+    if [ -z "$TUNNEL" ] && [ -z "${ASSUME_YES:-}" ] && [ -z "$UPGRADE" ]; then
+        ask_exit_tunnel
+    fi
+    [ "${TUNNEL:-off}" = backpack ] && TUNNEL_DIRECTION=direct
 fi
 case "${TUNNEL:-off}" in
     off|no|direct|"") TUNNEL=off ;;
@@ -986,6 +1046,7 @@ DNSMASQ_CHANGED=0
 # certificate, and the install died on its very last line - after doing all of
 # its work, and before recording that it had.
 ADMIN_URL_OUT=""
+EXIT_TUNNEL_OUT=""
 ADMIN_PASS_OUT=""
 SYNC_TOKEN_OUT=""
 USER_PANEL_OUT=""
@@ -1699,6 +1760,74 @@ if [ "$ROLE" = extra ]; then
     printf 'RELAY_IP=%s\nSELF_IP=%s\n' "$PEER_IP" "$SELF_IP" > /etc/smart-dns/exit.env
     umask 022
     info "carries traffic for $PEER_IP and nobody else"
+
+    # Its own tunnel, when it was asked for. The relay dials this machine, so
+    # this end listens and the port answers the relays and nobody else. The
+    # secret is this exit's alone - there is no pairing here to derive one
+    # from - and it is kept so a re-run does not invalidate what the panel has.
+    if [ "${TUNNEL:-off}" = backpack ] && install_backpack; then
+        step "Tunnel: BackPack $BACKPACK_VERSION - $TUNNEL_TRANSPORT, port $TUNNEL_PORT"
+        [ -n "${TUNNEL_SECRET:-}" ] || TUNNEL_SECRET="$(openssl rand -hex 24)"
+        mkdir -p "$TUNNEL_DIR"; chmod 700 "$TUNNEL_DIR"
+        note_file "$TUNNEL_DIR/tunnel.toml"
+        tmp="$(mktemp)"
+        {
+            printf '# written by the Fasty DNS installer - re-run it to change the tunnel\n'
+            printf '[direct]\nrole = "kharej"\naddr = "0.0.0.0:%s"\n' "$TUNNEL_PORT"
+            if [ "$TUNNEL_TRANSPORT" = wss ]; then
+                [ -f "$TUNNEL_DIR/tls.crt" ] || openssl req -x509 -newkey rsa:2048 -nodes \
+                    -days 3650 -subj "/CN=localhost" -keyout "$TUNNEL_DIR/tls.key" \
+                    -out "$TUNNEL_DIR/tls.crt" >/dev/null 2>&1 || true
+                printf 'tls_cert = "%s"\ntls_key = "%s"\n' "$TUNNEL_DIR/tls.crt" "$TUNNEL_DIR/tls.key"
+            fi
+            printf 'transport = "%s"\ntoken = "%s"\n' "$TUNNEL_TRANSPORT" "$TUNNEL_SECRET"
+        } > "$tmp"
+        install -m 600 "$tmp" "$TUNNEL_DIR/tunnel.toml"; rm -f "$tmp"
+        mkdir -p /etc/nftables.d
+        note_file "$TUNNEL_NFT"
+        cat > "$TUNNEL_NFT" <<EOF
+# written by the Fasty DNS installer: the tunnel's port answers the relays only
+table inet smartdns_tunnel
+delete table inet smartdns_tunnel
+table inet smartdns_tunnel {
+    chain input {
+        type filter hook input priority -5 ; policy accept ;
+        tcp dport $TUNNEL_PORT ip saddr != { $PEER_IP } drop
+        udp dport $TUNNEL_PORT ip saddr != { $PEER_IP } drop
+        meta nfproto ipv6 tcp dport $TUNNEL_PORT drop
+        meta nfproto ipv6 udp dport $TUNNEL_PORT drop
+    }
+}
+EOF
+        if nft -f "$TUNNEL_NFT" 2>/dev/null; then info "port $TUNNEL_PORT answers $PEER_IP only"
+        else warn "could not load the tunnel's firewall rule - port $TUNNEL_PORT is open to all"; fi
+        install_payload TUNNEL_SERVICE /etc/systemd/system/smartdns-tunnel.service || true
+        systemctl daemon-reload
+        enable_service smartdns-tunnel.service
+        systemctl restart smartdns-tunnel.service
+        sleep 2
+        if systemctl is-active --quiet smartdns-tunnel.service; then
+            info "tunnel listening on port $TUNNEL_PORT"
+        else
+            warn "the tunnel did not start - journalctl -u smartdns-tunnel"
+            TUNNEL=off
+        fi
+    else
+        [ "${TUNNEL:-off}" = backpack ] && { warn "no tunnel this run - the relay will reach this exit directly"; TUNNEL=off; }
+        systemctl disable --now smartdns-tunnel.service >/dev/null 2>&1 || true
+        rm -f "$TUNNEL_NFT"
+        rm -rf "$TUNNEL_DIR"
+        nft delete table inet smartdns_tunnel >/dev/null 2>&1 || true
+    fi
+    umask 077
+    set_env_key /etc/smart-dns/exit.env TUNNEL "${TUNNEL:-off}"
+    set_env_key /etc/smart-dns/exit.env TUNNEL_TRANSPORT "${TUNNEL_TRANSPORT:-}"
+    set_env_key /etc/smart-dns/exit.env TUNNEL_PORT "${TUNNEL_PORT:-}"
+    set_env_key /etc/smart-dns/exit.env TUNNEL_SECRET "${TUNNEL_SECRET:-}"
+    umask 022
+    chmod 600 /etc/smart-dns/exit.env
+    [ "${TUNNEL:-off}" = backpack ] \
+        && EXIT_TUNNEL_OUT="bp-$TUNNEL_TRANSPORT-$TUNNEL_PORT-d.$TUNNEL_SECRET"
 fi
 
 if [ "$ROLE" = relay ] && [ -z "${SYNC_TOKEN:-}" ] && [ -f /etc/smart-dns/sync.env ]; then
@@ -1776,6 +1905,9 @@ EOF
     install_payload DNS_PROFILE_UNIT /etc/systemd/system/smartdns-dns@.service || true
     mkdir -p /etc/smartdns-profiles
     install_payload SYNC_SERVICE /etc/systemd/system/smartdns-sync.service || true
+    # One instance per extra exit that has a tunnel; the sync agent starts and
+    # stops them as the panel's list of exits changes, so none is enabled here.
+    install_payload TUNNEL_EXIT_SERVICE /etc/systemd/system/smartdns-tunnel@.service || true
     systemctl daemon-reload
     enable_service smartdns-sync.service
     systemctl restart smartdns-sync.service
@@ -1823,7 +1955,11 @@ EOF
 fi
 
 # ---------------------------------------------------------------- tunnel
-if [ "$ROLE" = exit ]; then apply_tunnel "${SYNC_SECRET:-}"; else apply_tunnel "${SECRET:-}"; fi
+# An extra exit's tunnel is set up in its own section above, with its own
+# secret: it has no pairing to derive one from.
+if [ "$ROLE" = extra ]; then :
+elif [ "$ROLE" = exit ]; then apply_tunnel "${SYNC_SECRET:-}"
+else apply_tunnel "${SECRET:-}"; fi
 
 # ---------------------------------------------------------------- start
 step "Starting services"
@@ -1923,6 +2059,20 @@ if [ "$ROLE" = relay ]; then
     Manage the list with:  smartdns status | list | add | del | bypass
 
 ' "$RELAY_IP"
+elif [ "$ROLE" = extra ] && [ -n "$EXIT_TUNNEL_OUT" ]; then
+    printf '
+    This extra exit carries traffic for %s and accepts nothing else, through a
+    %s tunnel on port %s that the relay dials.
+    Add it in the Telegram bot, under 🛠 مدیریت -> 🌍 خروجی‌ها -> ➕, with the
+    tunnel line on the end:
+
+        a name | %s | %s
+
+    The relay needs BackPack for it: if it has never had a tunnel of its own,
+    run the installer there once with --tunnel. Without it the relay reaches
+    this exit directly and says so in its log.
+
+' "$PEER_IP" "$TUNNEL_TRANSPORT" "$TUNNEL_PORT" "$SELF_IP" "$EXIT_TUNNEL_OUT"
 elif [ "$ROLE" = extra ]; then
     printf '
     This extra exit carries traffic for %s and accepts nothing else.
@@ -3666,6 +3816,13 @@ exit 0
 #    # one with the lowest ping from the relay - 0 the main exit, and anything
 #    # else an extra exit's id.
 #    ("users", "exit_id", "INTEGER"),
+#    # An extra exit's tunnel, as its own installer printed it: BackPack's
+#    # transport and port, and the token both ends prove themselves with. Null
+#    # on an exit the relay reaches directly, which is every exit until one is
+#    # given a tunnel.
+#    ("exits", "tunnel_transport", "TEXT"),
+#    ("exits", "tunnel_port", "INTEGER"),
+#    ("exits", "tunnel_token", "TEXT"),
 #]
 #
 ## Indexes that have to exist whether the table was created by SCHEMA or grown
@@ -4793,6 +4950,25 @@ exit 0
 #
 #
 ## ------------------------------------------------------------------ exits
+## What an extra exit's installer prints when it is given a tunnel, and what the
+## operator pastes into the bot: BackPack's transport and port, the direction
+## (always d - the relay dials an extra exit), and the token the two ends prove
+## themselves with. One line, so the two ends cannot be set up differently.
+#EXIT_TUNNEL_TRANSPORTS = ("stealth", "wss", "tcp", "ws")
+#EXIT_TUNNEL_RE = re.compile(r"^bp-([a-z]{2,10})-(\d{1,5})-d\.([0-9a-f]{16,64})$")
+#
+#
+#def parse_exit_tunnel(line):
+#    """(transport, port, token) from an extra exit's tunnel line, or None."""
+#    m = EXIT_TUNNEL_RE.match((line or "").strip())
+#    if not m:
+#        return None
+#    transport, port, token = m.group(1), int(m.group(2)), m.group(3)
+#    if transport not in EXIT_TUNNEL_TRANSPORTS or not 1 <= port <= 65535:
+#        return None
+#    return transport, port, token
+#
+#
 #def main_exit_name(store):
 #    return store.setting("main_exit_name", "") or "سرور اصلی"
 #
@@ -5312,8 +5488,16 @@ exit 0
 #            # account's own choice, or the fastest this relay measured. The
 #            # relay turns it into an nginx map. With no extra exits nothing is
 #            # sent, and every address takes the relay's own exit.
-#            exits = {str(r["id"]): {"name": r["name"], "ip": r["ip"]}
-#                     for r in self.store.active_exits()}
+#            exits = {}
+#            for r in self.store.active_exits():
+#                e = {"name": r["name"], "ip": r["ip"]}
+#                # The tunnel travels with the exit: the relay dials it, and
+#                # this is the only place the two ends' settings come from.
+#                if r["tunnel_transport"] and r["tunnel_port"] and r["tunnel_token"]:
+#                    e["tunnel"] = {"transport": r["tunnel_transport"],
+#                                   "port": int(r["tunnel_port"]),
+#                                   "token": r["tunnel_token"]}
+#                exits[str(r["id"])] = e
 #            if exits:
 #                measured = fresh_exit_pings(self.store, self.client_address[0])
 #                choices = {r["id"]: r["exit_id"] for r in self.store.q(
@@ -6720,13 +6904,24 @@ exit 0
 ## customer's connections to their exit by a map on their address, kept in a
 ## file of its own so that rewriting it never touches nginx.conf.
 #EXITS_CONF = "/etc/nginx/smartdns-exits.conf"
+## An extra exit may be reached through a tunnel of its own, which this relay
+## dials. One BackPack client per exit, its config beside the main tunnel's and
+## its ports on loopback, where nginx sends that exit's customers.
+#BACKPACK_BIN = "/usr/local/lib/smart-dns/backpack"
+#TUNNEL_DIR = "/etc/smart-dns/tunnel"
+#EXIT_TUNNEL_TRANSPORTS = ("stealth", "wss", "tcp", "ws")
+## 18500 up, in pairs: the installer keeps this range off every other list, and
+## the main tunnel's own ports (18443, 18080) are outside it.
+#EXIT_TUNNEL_BASE = 18500
+#EXIT_TUNNEL_SLOTS = 50
 #EXIT_TARGETS = {}       # id -> {"name", "ip"}: the extra exits, from the panel
 #EXIT_PINGS = {}         # the last round's exit pings, until the next sync
 #SYNCED = [False]        # whether the panel has answered once, since start
 #
 #
 #def clean_exits(exits):
-#    """The panel's list of extra exits, keeping only what nginx can be given."""
+#    """The panel's list of extra exits, keeping only what nginx and BackPack
+#    can be given: a real address, and a tunnel only if all of it is there."""
 #    out = {}
 #    if not isinstance(exits, dict):
 #        return out
@@ -6738,7 +6933,15 @@ exit 0
 #                continue
 #        except (ValueError, TypeError):
 #            continue
-#        out[eid] = {"name": str(e.get("name") or eid)[:40], "ip": str(e["ip"])}
+#        kept = {"name": str(e.get("name") or eid)[:40], "ip": str(e["ip"])}
+#        t = e.get("tunnel")
+#        if isinstance(t, dict):
+#            transport, port, token = t.get("transport"), t.get("port"), t.get("token")
+#            if (transport in EXIT_TUNNEL_TRANSPORTS and isinstance(port, int)
+#                    and 1 <= port <= 65535
+#                    and isinstance(token, str) and re.fullmatch(r"[0-9a-f]{16,64}", token)):
+#                kept["tunnel"] = {"transport": transport, "port": port, "token": token}
+#        out[eid] = kept
 #    return out
 #
 #
@@ -6778,6 +6981,84 @@ exit 0
 #    return out
 #
 #
+#def exit_tunnel_ports(exits):
+#    """Which loopback ports each tunnelled exit is reached on.
+#
+#    Handed out by position rather than by id, so they stay inside the range
+#    the installer keeps free. The configs and the nginx map are written from
+#    this same map in one pass, so a port that moves moves in both.
+#    """
+#    ports = {}
+#    for i, eid in enumerate(sorted([e for e in exits if exits[e].get("tunnel")], key=int)):
+#        if i >= EXIT_TUNNEL_SLOTS:
+#            log(WARN, "exits: no tunnel port left for exit %s - it is reached directly" % eid)
+#            break
+#        ports[eid] = (EXIT_TUNNEL_BASE + i * 2, EXIT_TUNNEL_BASE + i * 2 + 1)
+#    return ports
+#
+#
+#def exit_tunnel_toml(exit_, ports):
+#    """BackPack's config for this relay's end: it dials the exit and offers the
+#    two ports nginx sends that exit's customers to."""
+#    t = exit_["tunnel"]
+#    return ("# written by smartdns-sync - the relay's end of %s's tunnel\n"
+#            "[direct]\nrole = \"iran\"\naddr = \"%s:%d\"\n"
+#            "ports = [\"127.0.0.1:%d=443\", \"127.0.0.1:%d=80\"]\n"
+#            "transport = \"%s\"\ntoken = \"%s\"\n"
+#            % (exit_["name"], exit_["ip"], t["port"], ports[0], ports[1],
+#               t["transport"], t["token"]))
+#
+#
+#def apply_exit_tunnels(exits):
+#    """One BackPack client per tunnelled exit: {exit id: (https, http)} for the
+#    ones actually running, so the nginx map can point at them.
+#
+#    Nothing is downloaded here. BackPack arrives with the installer, and a
+#    relay that has never been given a tunnel does not have it - such an exit is
+#    reached directly and the operator is told what to run."""
+#    want = exit_tunnel_ports(exits)
+#    if want and not os.path.exists(BACKPACK_BIN):
+#        log(WARN, "exits: %d exit(s) ask for a tunnel but BackPack is not on this relay - "
+#                  "they are reached directly. Run the installer here with --tunnel to fetch it."
+#            % len(want))
+#        want = {}
+#    os.makedirs(TUNNEL_DIR, exist_ok=True)
+#    running = {}
+#    for eid, ports in sorted(want.items(), key=lambda kv: int(kv[0])):
+#        conf = os.path.join(TUNNEL_DIR, "exit-%s.toml" % eid)
+#        text = exit_tunnel_toml(exits[eid], ports)
+#        try:
+#            with open(conf) as fh:
+#                have = fh.read()
+#        except OSError:
+#            have = None
+#        if have != text:
+#            with open(conf + ".tmp", "w") as fh:
+#                fh.write(text)
+#            os.chmod(conf + ".tmp", 0o600)
+#            os.replace(conf + ".tmp", conf)
+#        unit = "smartdns-tunnel@exit-%s.service" % eid
+#        active = sh("systemctl", "is-active", "--quiet", unit).returncode == 0
+#        if have != text or not active:
+#            sh("systemctl", "enable", unit)
+#            sh("systemctl", "restart", unit)
+#            log(INFO, "exits: tunnel to %s (%s, port %d) on 127.0.0.1:%d"
+#                % (exits[eid]["name"], exits[eid]["tunnel"]["transport"],
+#                   exits[eid]["tunnel"]["port"], ports[0]))
+#        running[eid] = ports
+#    # Exits that lost their tunnel, or went away entirely.
+#    for name in sorted(os.listdir(TUNNEL_DIR)):
+#        if not (name.startswith("exit-") and name.endswith(".toml")):
+#            continue
+#        eid = name[len("exit-"):-len(".toml")]
+#        if eid in running:
+#            continue
+#        sh("systemctl", "disable", "--now", "smartdns-tunnel@exit-%s.service" % eid)
+#        os.remove(os.path.join(TUNNEL_DIR, name))
+#        log(INFO, "exits: tunnel to exit %s stopped" % eid)
+#    return running
+#
+#
 #def default_exit():
 #    """(https, http) targets for everybody not on an extra exit: the tunnel's
 #    upstreams when there is one - they fall back to the exit by themselves -
@@ -6788,9 +7069,13 @@ exit 0
 #    return "%s:443" % ip, "%s:80" % ip
 #
 #
-#def exits_conf(exits, assignment):
-#    """The nginx include: a map per protocol, and an upstream per extra exit
-#    that falls back to this relay's own exit when it does not answer."""
+#def exits_conf(exits, assignment, tunnels=None):
+#    """The nginx include: a map per protocol, and an upstream per extra exit.
+#
+#    A tunnelled exit is reached at its end of the tunnel on loopback, and falls
+#    back to the same exit without the tunnel before it falls back to this
+#    relay's own exit - a customer keeps the exit they chose for as long as it
+#    answers at all."""
 #    https, http = default_exit()
 #    main = (CFG or {}).get("EXIT_IP", "")
 #    lines = ["# written by smartdns-sync whenever it changes - edits here are lost", ""]
@@ -6801,10 +7086,15 @@ exit 0
 #            if eid in exits:
 #                lines.append("    %s exit_%s_%s;" % (ip, eid, proto))
 #        lines.append("}")
+#    tunnels = tunnels or {}
 #    for eid in sorted(exits, key=int):
-#        for proto, port in (("https", 443), ("http", 80)):
+#        for i, (proto, port) in enumerate((("https", 443), ("http", 80))):
 #            lines.append("upstream exit_%s_%s {" % (eid, proto))
-#            lines.append("    server %s:%d;" % (exits[eid]["ip"], port))
+#            if eid in tunnels:
+#                lines.append("    server 127.0.0.1:%d;" % tunnels[eid][i])
+#                lines.append("    server %s:%d backup;" % (exits[eid]["ip"], port))
+#            else:
+#                lines.append("    server %s:%d;" % (exits[eid]["ip"], port))
 #            if main and main != exits[eid]["ip"]:
 #                lines.append("    server %s:%d backup;" % (main, port))
 #            lines.append("}")
@@ -6818,7 +7108,7 @@ exit 0
 #    os.replace(tmp, EXITS_CONF)
 #
 #
-#def apply_exits(exits, assignment):
+#def apply_exits(exits, assignment, tunnels=None):
 #    """Point each address at its exit: rewrite the map and reload nginx - only
 #    when it has changed, and only if nginx accepts it."""
 #    if not (CFG or {}).get("EXIT_IP"):
@@ -6833,7 +7123,7 @@ exit 0
 #            continue
 #        if eid in exits:
 #            chosen[ip] = eid
-#    want = exits_conf(exits, chosen)
+#    want = exits_conf(exits, chosen, tunnels)
 #    try:
 #        with open(EXITS_CONF) as fh:
 #            have = fh.read()
@@ -6917,8 +7207,9 @@ exit 0
 #    # resolvers and speeds are, so a new address is pointed at its exit no
 #    # later than the moment it is let in.
 #    try:
+#        tunnels = apply_exit_tunnels(exits)
 #        apply_exits(exits, {a["ip"]: str(a.get("exit") or "")
-#                            for a in answer.get("allowed") or [] if a.get("ip")})
+#                            for a in answer.get("allowed") or [] if a.get("ip")}, tunnels)
 #    except Exception as e:
 #        log_exception("exits failed: %s" % e)
 #
@@ -10471,8 +10762,13 @@ exit 0
 #
 #EXIT_FORMAT = ("نام و آی‌پی سرور خروجی را این‌طور بفرستید:\n"
 #               "آلمان ۲ | 203.0.113.10\n\n"
+#               "اگر موقع نصب برایش تونل گرفتید، خط تونلی که چاپ کرده را هم آخرش بگذارید:\n"
+#               "آلمان ۲ | 203.0.113.10 | bp-stealth-8444-d.<token>\n\n"
 #               "اول روی آن سرور doctor-dns.sh را اجرا کنید، گزینهٔ «3) extra exit» را بزنید "
 #               "و آی‌پی رله را بدهید.")
+#TUNNEL_FORMAT = ("خط تونلی که نصب‌کنندهٔ آن سرور چاپ کرده را بفرستید:\n"
+#                 "bp-stealth-8444-d.<token>\n\n"
+#                 "برای برداشتن تونل و وصل شدن مستقیم، «حذف» را بفرستید.")
 #
 #
 #def ms_text(ms):
@@ -11154,6 +11450,8 @@ exit 0
 #            return self.exit_card(chat, ids[0])
 #        if cmd == "xr" and ids:
 #            return self.ask(chat, ("admin-exit-name", ids[0]), "نام تازهٔ این سرور خروجی:")
+#        if cmd == "xu" and ids and ids[0] != 0:
+#            return self.ask(chat, ("admin-exit-tunnel", ids[0]), TUNNEL_FORMAT)
 #        if cmd == "xt" and ids and ids[0] != 0:
 #            self.store.run("UPDATE exits SET active = 1 - active WHERE id = ?", (ids[0],))
 #            return self.exit_card(chat, ids[0])
@@ -11218,17 +11516,43 @@ exit 0
 #            self.say(chat, "✅ %s%s" % (done, "؛ حساب فعال شد" if joined else ""))
 #            return self.user_card(chat, uid)
 #        if kind == "admin-exit-new":
-#            name, _, ip = text.partition("|")
-#            name, ip = name.strip()[:40], ip.translate(DIGITS).strip()
+#            parts = [x.strip() for x in text.split("|")]
+#            name = parts[0][:40] if parts else ""
+#            ip = parts[1].translate(DIGITS) if len(parts) > 1 else ""
+#            tunnel = P.parse_exit_tunnel(parts[2]) if len(parts) > 2 else None
 #            why = self.exit_problem(name, ip)
+#            if not why and len(parts) > 2 and not tunnel:
+#                why = "خط تونل درست نیست."
 #            if why:
 #                return self.say(chat, "⚠️ %s\n\n%s" % (why, EXIT_FORMAT), cancel_kb())
 #            self.state.pop(chat, None)
-#            eid = self.store.run("INSERT INTO exits (name, ip, active, created_at)"
-#                                 " VALUES (?, ?, 1, ?)", (name, ip, P.now())).lastrowid
+#            eid = self.store.run(
+#                "INSERT INTO exits (name, ip, active, created_at, tunnel_transport,"
+#                " tunnel_port, tunnel_token) VALUES (?, ?, 1, ?, ?, ?, ?)",
+#                (name, ip, P.now()) + (tunnel or (None, None, None))).lastrowid
 #            P.log(P.INFO, "bot: exit %d (%s) added by telegram %d" % (eid, ip, chat))
 #            self.say(chat, "✅ اضافه شد. رله تا ۳۰ ثانیه دیگر آن را می‌شناسد و تا ۵ دقیقه "
 #                           "پینگش را می‌گیرد.")
+#            return self.exit_card(chat, eid)
+#        if kind == "admin-exit-tunnel":
+#            eid = waiting[1]
+#            if text.strip() in ("حذف", "-", "off"):
+#                self.state.pop(chat, None)
+#                self.store.run("UPDATE exits SET tunnel_transport = NULL, tunnel_port = NULL,"
+#                               " tunnel_token = NULL WHERE id = ?", (eid,))
+#                self.say(chat, "✅ تونل برداشته شد؛ رله تا ۳۰ ثانیه دیگر مستقیم وصل می‌شود.")
+#                return self.exit_card(chat, eid)
+#            tunnel = P.parse_exit_tunnel(text)
+#            if not tunnel:
+#                return self.say(chat, "⚠️ خط تونل درست نیست.\n\n%s" % TUNNEL_FORMAT, cancel_kb())
+#            self.state.pop(chat, None)
+#            self.store.run("UPDATE exits SET tunnel_transport = ?, tunnel_port = ?,"
+#                           " tunnel_token = ? WHERE id = ?", tunnel + (eid,))
+#            P.log(P.INFO, "bot: exit %d given a %s tunnel on port %d by telegram %d"
+#                  % (eid, tunnel[0], tunnel[1], chat))
+#            self.say(chat, "✅ تونل ذخیره شد. رله تا ۳۰ ثانیه دیگر آن را برقرار می‌کند.\n"
+#                           "اگر رله تا حالا هیچ تونلی نداشته، اول روی رله "
+#                           "doctor-dns.sh را با --tunnel اجرا کنید تا BackPack نصب شود.")
 #            return self.exit_card(chat, eid)
 #        if kind == "admin-exit-name":
 #            name = text.strip()[:40]
@@ -11534,11 +11858,16 @@ exit 0
 #        r = self.store.one("SELECT * FROM exits WHERE id = ?", (eid,))
 #        if not r:
 #            return self.say(chat, "این سرور پیدا نشد.")
-#        self.say(chat, "%s\nآی‌پی: %s\nپینگ: %s\nوضعیت: %s\nانتخاب کرده‌اند: %d نفر" % (
-#            r["name"], r["ip"], ms_text(ms), "فعال" if r["active"] else "غیرفعال", chosen), kb(
+#        tunnel = ("%s، پورت %d" % (r["tunnel_transport"], r["tunnel_port"])
+#                  if r["tunnel_transport"] and r["tunnel_token"] else "ندارد — مستقیم")
+#        self.say(chat, "%s\nآی‌پی: %s\nپینگ: %s\nوضعیت: %s\nتونل: %s\n"
+#                       "انتخاب کرده‌اند: %d نفر" % (
+#                           r["name"], r["ip"], ms_text(ms),
+#                           "فعال" if r["active"] else "غیرفعال", tunnel, chosen), kb(
 #            [btn("✏️ نام", "a:xr:%d" % eid),
 #             btn("⏸ غیرفعال کردن" if r["active"] else "▶️ فعال کردن", "a:xt:%d" % eid)],
-#            [btn("🗑 حذف", "a:xd:%d" % eid)], [btn("↩️ همهٔ خروجی‌ها", "a:ex")]))
+#            [btn("🔀 تونل", "a:xu:%d" % eid), btn("🗑 حذف", "a:xd:%d" % eid)],
+#            [btn("↩️ همهٔ خروجی‌ها", "a:ex")]))
 #
 #    # game pings
 #    def admin_pings(self, chat):
@@ -11992,6 +12321,11 @@ exit 0
 #    role=relay
 #    status="smartdns-sync dnsmasq nginx coturn epic-pin.timer smartdns-acl-save.timer"
 #    logs="smartdns-sync dnsmasq nginx coturn epic-pin smartdns-acl-save"
+#    # One tunnel per extra exit that has one, started by the sync agent.
+#    for u in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+#        status="$status $u"
+#        logs="$logs $u"
+#    done
 #    for f in /etc/smartdns-profiles/*.conf; do
 #        [ -e "$f" ] || continue
 #        status="$status smartdns-dns@$(basename "$f" .conf)"
@@ -12002,7 +12336,7 @@ exit 0
 #    status="smartdns-panel smartdns-admin smartdns-bot nginx smartdns-cert.timer"
 #    logs="smartdns-panel smartdns-admin smartdns-bot nginx smartdns-cert"
 #elif [ -f "$ETC/exit.env" ]; then
-#    # An extra exit: nginx carrying traffic, and nothing else of ours.
+#    # An extra exit: nginx carrying traffic, and its own tunnel when it has one.
 #    role=extra
 #    status="nginx"
 #    logs="nginx"
@@ -12615,7 +12949,7 @@ exit 0
 #    units="smartdns-panel smartdns-admin smartdns-bot smartdns-tunnel nginx"
 #elif [ -f "$ETC/exit.env" ]; then
 #    role=extra
-#    units="nginx"
+#    units="nginx smartdns-tunnel"
 #else
 #    echo "Fasty DNS is not installed on this machine" >&2
 #    exit 1
@@ -12657,6 +12991,11 @@ exit 0
 ## The tunnel, when there is one, before nginx: nginx falls back to the direct
 ## path while it is down, so this order costs nobody a connection.
 #installed smartdns-tunnel && restart smartdns-tunnel
+## The tunnels to extra exits, one instance per exit, on the relay.
+#for u in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+#    restart "$u"
+#    units="$units $u"
+#done
 ## The same for nginx, which carries every customer's traffic.
 #if out="$(nginx -t 2>&1)"; then
 #    restart nginx
@@ -13112,9 +13451,7 @@ exit 0
 #
 #if [ -f "$ETC/sync.env" ]; then role=relay; env="$ETC/sync.env"
 #elif [ -f "$ETC/panel.env" ]; then role=exit; env="$ETC/panel.env"
-#elif [ -f "$ETC/exit.env" ]; then
-#    echo "an extra exit has no tunnel - the relay reaches it directly; only the main exit has one."
-#    exit 0
+#elif [ -f "$ETC/exit.env" ]; then role=extra; env="$ETC/exit.env"
 #else echo "Fasty DNS is not installed on this machine" >&2; exit 1; fi
 #
 #get() { sed -n "s/^$1=//p" "$env" 2>/dev/null | head -1; }
@@ -13127,6 +13464,19 @@ exit 0
 ## Set up by the installer, whether on or off at the moment.
 #configured() { [ -f "$ETC/tunnel/tunnel.toml" ] && [ -n "$(get TUNNEL_TRANSPORT)" ]; }
 #
+## The tunnels to extra exits, which the sync agent runs one of per exit. Not
+## the pair's own tunnel above: these have no settings on this machine but the
+## config the sync agent writes from what the panel sends.
+#extra_tunnels() {
+#    local u state conf port
+#    for u in $(systemctl list-units --plain --no-legend 'smartdns-tunnel@*' 2>/dev/null | awk '{print $1}'); do
+#        conf="$ETC/tunnel/$(echo "$u" | sed 's/smartdns-tunnel@//; s/\.service$//').toml"
+#        port="$(sed -n 's/^addr = "[^:]*:\([0-9]*\)"/\1/p' "$conf" 2>/dev/null | head -1)"
+#        state="$(systemctl is-active "$u" 2>/dev/null || true)"
+#        printf 'exit       %s - %s, port %s\n' "$u" "$state" "${port:-?}"
+#    done
+#}
+#
 #show() {
 #    if ! configured; then
 #        echo "no tunnel is set up on this $role - the relay reaches the exit directly."
@@ -13137,7 +13487,10 @@ exit 0
 #    printf 'tunnel     BackPack, %s, %s, port %s\n' "$(get TUNNEL_TRANSPORT)" "$(get TUNNEL_DIRECTION)" "$port"
 #    printf 'setting    %s\n' "$([ "$(get TUNNEL)" = backpack ] && echo on || echo off)"
 #    printf 'service    %s\n' "$(systemctl is-active $UNIT 2>/dev/null || true)"
-#    if [ "$role" = relay ]; then
+#    if [ "$role" = extra ]; then
+#        printf 'connected  %s tunnel connection(s) with the relay\n' \
+#            "$(ss -Htn state established "( sport = :$port )" 2>/dev/null | wc -l)"
+#    elif [ "$role" = relay ]; then
 #        # Straight at the tunnel's own end: through nginx the fallback would
 #        # answer too, and say nothing about the tunnel.
 #        local code
@@ -13178,6 +13531,28 @@ exit 0
 #    ;;
 #esac
 #__END_SMARTDNS_TUNNEL__
+
+#__BEGIN_TUNNEL_EXIT_SERVICE__
+#[Unit]
+#Description=Fasty DNS tunnel to an extra exit (BackPack) - %i
+#After=network-online.target
+#Wants=network-online.target
+## One instance per extra exit that has a tunnel, started and stopped by the
+## sync agent as the panel's list of exits changes. This relay always dials:
+## the exit listens, so there is no port to open here and no rule to hold.
+#PartOf=smartdns-sync.service
+#
+#[Service]
+#ExecStart=/usr/local/lib/smart-dns/backpack -c /etc/smart-dns/tunnel/%i.toml
+#Restart=always
+#RestartSec=5
+## Every customer connection is a stream in the tunnel, and a console download
+## opens dozens at once.
+#LimitNOFILE=65535
+#
+#[Install]
+#WantedBy=multi-user.target
+#__END_TUNNEL_EXIT_SERVICE__
 
 #__BEGIN_SMARTDNS_MENU__
 ##!/bin/bash

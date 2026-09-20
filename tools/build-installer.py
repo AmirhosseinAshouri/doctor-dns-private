@@ -57,6 +57,7 @@ PAYLOADS = [
     ("SMARTDNS_WATCH", "templates/smartdns-watch"),
     ("TUNNEL_SERVICE", "templates/smartdns-tunnel.service"),
     ("SMARTDNS_TUNNEL", "templates/smartdns-tunnel"),
+    ("TUNNEL_EXIT_SERVICE", "templates/smartdns-tunnel-exit.service"),
     ("SMARTDNS_MENU", "templates/smartdns-menu"),
     ("SMARTDNS_API_GUARD", "templates/smartdns-api-guard"),
     ("EPIC_PIN", "templates/epic-pin"),

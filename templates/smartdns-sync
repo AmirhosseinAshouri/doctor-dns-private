@@ -951,13 +951,24 @@ def ping_loop():
 # customer's connections to their exit by a map on their address, kept in a
 # file of its own so that rewriting it never touches nginx.conf.
 EXITS_CONF = "/etc/nginx/smartdns-exits.conf"
+# An extra exit may be reached through a tunnel of its own, which this relay
+# dials. One BackPack client per exit, its config beside the main tunnel's and
+# its ports on loopback, where nginx sends that exit's customers.
+BACKPACK_BIN = "/usr/local/lib/smart-dns/backpack"
+TUNNEL_DIR = "/etc/smart-dns/tunnel"
+EXIT_TUNNEL_TRANSPORTS = ("stealth", "wss", "tcp", "ws")
+# 18500 up, in pairs: the installer keeps this range off every other list, and
+# the main tunnel's own ports (18443, 18080) are outside it.
+EXIT_TUNNEL_BASE = 18500
+EXIT_TUNNEL_SLOTS = 50
 EXIT_TARGETS = {}       # id -> {"name", "ip"}: the extra exits, from the panel
 EXIT_PINGS = {}         # the last round's exit pings, until the next sync
 SYNCED = [False]        # whether the panel has answered once, since start
 
 
 def clean_exits(exits):
-    """The panel's list of extra exits, keeping only what nginx can be given."""
+    """The panel's list of extra exits, keeping only what nginx and BackPack
+    can be given: a real address, and a tunnel only if all of it is there."""
     out = {}
     if not isinstance(exits, dict):
         return out
@@ -969,7 +980,15 @@ def clean_exits(exits):
                 continue
         except (ValueError, TypeError):
             continue
-        out[eid] = {"name": str(e.get("name") or eid)[:40], "ip": str(e["ip"])}
+        kept = {"name": str(e.get("name") or eid)[:40], "ip": str(e["ip"])}
+        t = e.get("tunnel")
+        if isinstance(t, dict):
+            transport, port, token = t.get("transport"), t.get("port"), t.get("token")
+            if (transport in EXIT_TUNNEL_TRANSPORTS and isinstance(port, int)
+                    and 1 <= port <= 65535
+                    and isinstance(token, str) and re.fullmatch(r"[0-9a-f]{16,64}", token)):
+                kept["tunnel"] = {"transport": transport, "port": port, "token": token}
+        out[eid] = kept
     return out
 
 
@@ -1009,6 +1028,84 @@ def ping_exits(exits):
     return out
 
 
+def exit_tunnel_ports(exits):
+    """Which loopback ports each tunnelled exit is reached on.
+
+    Handed out by position rather than by id, so they stay inside the range
+    the installer keeps free. The configs and the nginx map are written from
+    this same map in one pass, so a port that moves moves in both.
+    """
+    ports = {}
+    for i, eid in enumerate(sorted([e for e in exits if exits[e].get("tunnel")], key=int)):
+        if i >= EXIT_TUNNEL_SLOTS:
+            log(WARN, "exits: no tunnel port left for exit %s - it is reached directly" % eid)
+            break
+        ports[eid] = (EXIT_TUNNEL_BASE + i * 2, EXIT_TUNNEL_BASE + i * 2 + 1)
+    return ports
+
+
+def exit_tunnel_toml(exit_, ports):
+    """BackPack's config for this relay's end: it dials the exit and offers the
+    two ports nginx sends that exit's customers to."""
+    t = exit_["tunnel"]
+    return ("# written by smartdns-sync - the relay's end of %s's tunnel\n"
+            "[direct]\nrole = \"iran\"\naddr = \"%s:%d\"\n"
+            "ports = [\"127.0.0.1:%d=443\", \"127.0.0.1:%d=80\"]\n"
+            "transport = \"%s\"\ntoken = \"%s\"\n"
+            % (exit_["name"], exit_["ip"], t["port"], ports[0], ports[1],
+               t["transport"], t["token"]))
+
+
+def apply_exit_tunnels(exits):
+    """One BackPack client per tunnelled exit: {exit id: (https, http)} for the
+    ones actually running, so the nginx map can point at them.
+
+    Nothing is downloaded here. BackPack arrives with the installer, and a
+    relay that has never been given a tunnel does not have it - such an exit is
+    reached directly and the operator is told what to run."""
+    want = exit_tunnel_ports(exits)
+    if want and not os.path.exists(BACKPACK_BIN):
+        log(WARN, "exits: %d exit(s) ask for a tunnel but BackPack is not on this relay - "
+                  "they are reached directly. Run the installer here with --tunnel to fetch it."
+            % len(want))
+        want = {}
+    os.makedirs(TUNNEL_DIR, exist_ok=True)
+    running = {}
+    for eid, ports in sorted(want.items(), key=lambda kv: int(kv[0])):
+        conf = os.path.join(TUNNEL_DIR, "exit-%s.toml" % eid)
+        text = exit_tunnel_toml(exits[eid], ports)
+        try:
+            with open(conf) as fh:
+                have = fh.read()
+        except OSError:
+            have = None
+        if have != text:
+            with open(conf + ".tmp", "w") as fh:
+                fh.write(text)
+            os.chmod(conf + ".tmp", 0o600)
+            os.replace(conf + ".tmp", conf)
+        unit = "smartdns-tunnel@exit-%s.service" % eid
+        active = sh("systemctl", "is-active", "--quiet", unit).returncode == 0
+        if have != text or not active:
+            sh("systemctl", "enable", unit)
+            sh("systemctl", "restart", unit)
+            log(INFO, "exits: tunnel to %s (%s, port %d) on 127.0.0.1:%d"
+                % (exits[eid]["name"], exits[eid]["tunnel"]["transport"],
+                   exits[eid]["tunnel"]["port"], ports[0]))
+        running[eid] = ports
+    # Exits that lost their tunnel, or went away entirely.
+    for name in sorted(os.listdir(TUNNEL_DIR)):
+        if not (name.startswith("exit-") and name.endswith(".toml")):
+            continue
+        eid = name[len("exit-"):-len(".toml")]
+        if eid in running:
+            continue
+        sh("systemctl", "disable", "--now", "smartdns-tunnel@exit-%s.service" % eid)
+        os.remove(os.path.join(TUNNEL_DIR, name))
+        log(INFO, "exits: tunnel to exit %s stopped" % eid)
+    return running
+
+
 def default_exit():
     """(https, http) targets for everybody not on an extra exit: the tunnel's
     upstreams when there is one - they fall back to the exit by themselves -
@@ -1019,9 +1116,13 @@ def default_exit():
     return "%s:443" % ip, "%s:80" % ip
 
 
-def exits_conf(exits, assignment):
-    """The nginx include: a map per protocol, and an upstream per extra exit
-    that falls back to this relay's own exit when it does not answer."""
+def exits_conf(exits, assignment, tunnels=None):
+    """The nginx include: a map per protocol, and an upstream per extra exit.
+
+    A tunnelled exit is reached at its end of the tunnel on loopback, and falls
+    back to the same exit without the tunnel before it falls back to this
+    relay's own exit - a customer keeps the exit they chose for as long as it
+    answers at all."""
     https, http = default_exit()
     main = (CFG or {}).get("EXIT_IP", "")
     lines = ["# written by smartdns-sync whenever it changes - edits here are lost", ""]
@@ -1032,10 +1133,15 @@ def exits_conf(exits, assignment):
             if eid in exits:
                 lines.append("    %s exit_%s_%s;" % (ip, eid, proto))
         lines.append("}")
+    tunnels = tunnels or {}
     for eid in sorted(exits, key=int):
-        for proto, port in (("https", 443), ("http", 80)):
+        for i, (proto, port) in enumerate((("https", 443), ("http", 80))):
             lines.append("upstream exit_%s_%s {" % (eid, proto))
-            lines.append("    server %s:%d;" % (exits[eid]["ip"], port))
+            if eid in tunnels:
+                lines.append("    server 127.0.0.1:%d;" % tunnels[eid][i])
+                lines.append("    server %s:%d backup;" % (exits[eid]["ip"], port))
+            else:
+                lines.append("    server %s:%d;" % (exits[eid]["ip"], port))
             if main and main != exits[eid]["ip"]:
                 lines.append("    server %s:%d backup;" % (main, port))
             lines.append("}")
@@ -1049,7 +1155,7 @@ def _write_exits(text):
     os.replace(tmp, EXITS_CONF)
 
 
-def apply_exits(exits, assignment):
+def apply_exits(exits, assignment, tunnels=None):
     """Point each address at its exit: rewrite the map and reload nginx - only
     when it has changed, and only if nginx accepts it."""
     if not (CFG or {}).get("EXIT_IP"):
@@ -1064,7 +1170,7 @@ def apply_exits(exits, assignment):
             continue
         if eid in exits:
             chosen[ip] = eid
-    want = exits_conf(exits, chosen)
+    want = exits_conf(exits, chosen, tunnels)
     try:
         with open(EXITS_CONF) as fh:
             have = fh.read()
@@ -1148,8 +1254,9 @@ def sync_once():
     # resolvers and speeds are, so a new address is pointed at its exit no
     # later than the moment it is let in.
     try:
+        tunnels = apply_exit_tunnels(exits)
         apply_exits(exits, {a["ip"]: str(a.get("exit") or "")
-                            for a in answer.get("allowed") or [] if a.get("ip")})
+                            for a in answer.get("allowed") or [] if a.get("ip")}, tunnels)
     except Exception as e:
         log_exception("exits failed: %s" % e)
 
