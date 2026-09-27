@@ -182,7 +182,11 @@ check("a customer quiet for hours drops off the board",
 print("where the games are")
 catalogue = json.load(open(os.path.join(HERE, "..", "domains", "services.json"),
                           encoding="utf-8"))["services"]
-where = {"steamcommunity.com": "104.90.1.1", "store.steampowered.com": "23.50.2.2"}
+# Two of Steam's hosts as the catalogue names them, rather than two names
+# written out here: the catalogue is edited often, and a test that hard-codes
+# what is in it fails for the wrong reason the next time it is.
+STEAM_A, STEAM_B = panel.ping_targets(catalogue)["steam"]["hosts"][:2]
+where = {STEAM_A: "104.90.1.1", STEAM_B: "23.50.2.2"}
 countries = {"104.90.1.1": ("DE", "Akamai"), "23.50.2.2": ("NL", "Akamai"),
              "1.2.3.4": ("SG", "Somebody")}
 looked = []
@@ -209,12 +213,12 @@ check("every game host in the catalogue gets a row",
 check("only the games, nothing else the service resolves",
       not any(h.endswith("netflix.com") or "openai" in h for h in hosts), str(sorted(hosts)[:5]))
 check("a host that resolved is located",
-      hosts["steamcommunity.com"]["ip"] == "104.90.1.1"
-      and hosts["steamcommunity.com"]["country"] == "DE", str(dict(hosts["steamcommunity.com"])))
-check("with who owns the address", hosts["steamcommunity.com"]["org"] == "Akamai")
+      hosts[STEAM_A]["ip"] == "104.90.1.1"
+      and hosts[STEAM_A]["country"] == "DE", str(dict(hosts[STEAM_A])))
+check("with who owns the address", hosts[STEAM_A]["org"] == "Akamai")
 check("and it says which game it belongs to",
-      hosts["steamcommunity.com"]["service"] == "steam"
-      and hosts["steamcommunity.com"]["label"], str(dict(hosts["steamcommunity.com"])))
+      hosts[STEAM_A]["service"] == "steam"
+      and hosts[STEAM_A]["label"], str(dict(hosts[STEAM_A])))
 check("a host that does not resolve is left blank, not guessed",
       all(hosts[h]["ip"] is None for h in hosts if h not in where), str(done))
 check("and nobody is asked about an address that was never found",
@@ -223,13 +227,14 @@ check("and nobody is asked about an address that was never found",
 looked.clear()
 panel.refresh_game_hosts(store, catalogue, lookups=200)
 check("a second pass asks nothing again - the answers are kept", looked == [], str(looked))
-store.run("UPDATE game_hosts SET at = ? WHERE host = 'steamcommunity.com'",
-          ((datetime.now(timezone.utc) - timedelta(hours=30)).isoformat(timespec="seconds"),))
-where["steamcommunity.com"] = "1.2.3.4"
+store.run("UPDATE game_hosts SET at = ? WHERE host = ?",
+          ((datetime.now(timezone.utc) - timedelta(hours=30)).isoformat(timespec="seconds"),
+           STEAM_A))
+where[STEAM_A] = "1.2.3.4"
 panel.refresh_game_hosts(store, catalogue, lookups=200)
 check("an address that moved is looked up again", looked == ["1.2.3.4"], str(looked))
 check("and the new country replaces the old",
-      store.one("SELECT * FROM game_hosts WHERE host = 'steamcommunity.com'")["country"] == "SG")
+      store.one("SELECT * FROM game_hosts WHERE host = ?", (STEAM_A,))["country"] == "SG")
 
 store.run("UPDATE game_hosts SET at = '1970-01-01T00:00:00+00:00'")
 looked.clear()
@@ -339,7 +344,7 @@ check("it says plainly this is not an in-game ping",
 check("the exits are listed with their latency", "خروجی‌ها" in page)
 check("the games' countries are grouped", "SG" in page and "سرورهای بازی‌ها کجا هستند" in page)
 check("with the games in each", "Steam" in page)
-check("and the hosts one by one", "steamcommunity.com" in page)
+check("and the hosts one by one", STEAM_A in page)
 check("nothing is left unescaped", "<script" not in page)
 
 store.run("DELETE FROM client_paths")
