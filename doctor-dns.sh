@@ -3530,6 +3530,7 @@ exit 0
 #import secrets
 #import signal
 #import shutil
+#import socket
 #import sqlite3
 #import ssl
 #import sys
@@ -3752,6 +3753,32 @@ exit 0
 #    attempts   INTEGER NOT NULL DEFAULT 0
 #);
 #CREATE INDEX IF NOT EXISTS outbox_unsent ON outbox(sent_at, id);
+#
+#-- How far each customer is from the relay they use, as the kernel there
+#-- measured it on the connections they already had open. One row per address,
+#-- replaced on every sync that sees it, and pruned once it goes quiet: this is
+#-- a live picture, not a history.
+#CREATE TABLE IF NOT EXISTS client_paths (
+#    ip      TEXT PRIMARY KEY,
+#    relay   TEXT NOT NULL,
+#    rtt_ms  REAL,
+#    conns   INTEGER NOT NULL DEFAULT 0,
+#    at      TEXT NOT NULL
+#);
+#
+#-- Where each game's hosts actually are: what the name resolves to from this
+#-- machine, and which country that address is in. Looked up here rather than on
+#-- a relay, because a relay in Iran is answered by whatever is nearest to Iran -
+#-- and because the question this answers is where an exit would be worth having.
+#CREATE TABLE IF NOT EXISTS game_hosts (
+#    host    TEXT PRIMARY KEY,
+#    service TEXT NOT NULL,
+#    label   TEXT NOT NULL,
+#    ip      TEXT,
+#    country TEXT,
+#    org     TEXT,
+#    at      TEXT NOT NULL
+#);
 #
 #-- Extra exits: servers abroad, installed as "extra exit", that carry traffic
 #-- and nothing else - no database, no bot. The main exit is not a row: it is
@@ -4348,6 +4375,28 @@ exit 0
 #
 #    def active_exits(self):
 #        return self.q("SELECT * FROM exits WHERE active = 1 ORDER BY id")
+#
+#    def note_client_rtt(self, relay, rtts):
+#        """Keep how far each customer is from the relay, latest reading only."""
+#        if not isinstance(rtts, dict):
+#            return
+#        stamp = now()
+#        for ip, v in list(rtts.items())[:500]:
+#            if not (isinstance(ip, str) and valid_ip(ip) and isinstance(v, dict)):
+#                continue
+#            ms, conns = v.get("ms"), v.get("conns")
+#            if not isinstance(ms, (int, float)) or not 0 <= ms < 60000:
+#                continue
+#            self.run(
+#                "INSERT INTO client_paths (ip, relay, rtt_ms, conns, at)"
+#                " VALUES (?, ?, ?, ?, ?) ON CONFLICT(ip) DO UPDATE SET"
+#                " relay = excluded.relay, rtt_ms = excluded.rtt_ms,"
+#                " conns = excluded.conns, at = excluded.at",
+#                (ip, relay, float(ms),
+#                 int(conns) if isinstance(conns, int) and 0 <= conns < 100000 else 0, stamp))
+#        # A customer who has closed everything stops being live.
+#        self.run("DELETE FROM client_paths WHERE at < ?",
+#                 ((datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(timespec="seconds"),))
 #
 #    def note_exit_pings(self, relay, pings):
 #        """Keep how fast each exit answered one relay, the latest round only."""
@@ -4969,6 +5018,77 @@ exit 0
 #    return transport, port, token
 #
 #
+## Where the games are. Asked of this machine, which is abroad, so the answer is
+## the edge a server outside Iran is sent to - which is the one an exit would
+## reach. The country comes from a free lookup, once per address, and is kept:
+## addresses move rarely and every extra request is a request this machine did
+## not need to make.
+#COUNTRY_SERVICES = ("https://ipwho.is/%s", "http://ip-api.com/json/%s")
+#COUNTRY_REFRESH_HOURS = 24
+#COUNTRY_LOOKUPS_PER_PASS = 20
+#
+#
+#def ip_country(ip, timeout=8):
+#    """(country code, owner) for an address, or (None, None)."""
+#    for url in COUNTRY_SERVICES:
+#        try:
+#            with urllib.request.urlopen(url % ip, timeout=timeout) as res:
+#                data = json.loads(res.read() or b"{}")
+#        except Exception:
+#            continue
+#        if not isinstance(data, dict):
+#            continue
+#        code = data.get("country_code") or data.get("countryCode")
+#        org = data.get("org") or data.get("isp") or (data.get("connection") or {}).get("org")
+#        if isinstance(code, str) and re.fullmatch(r"[A-Za-z]{2}", code):
+#            return code.upper(), (str(org)[:60] if org else None)
+#    return None, None
+#
+#
+#def refresh_game_hosts(store, catalogue, lookups=COUNTRY_LOOKUPS_PER_PASS):
+#    """Resolve the games' hosts from here and note where they are.
+#
+#    A few at a time, oldest first: nothing depends on this being quick, and a
+#    burst of lookups is a good way to be refused by whoever answers them.
+#    """
+#    targets = ping_targets(catalogue)
+#    for key, info in sorted(targets.items()):
+#        for host in info["hosts"]:
+#            store.run("INSERT INTO game_hosts (host, service, label, at) VALUES (?, ?, ?, ?)"
+#                      " ON CONFLICT(host) DO UPDATE SET service = excluded.service,"
+#                      " label = excluded.label",
+#                      (host, key, info["label"], "1970-01-01T00:00:00+00:00"))
+#    stale = (datetime.now(timezone.utc)
+#             - timedelta(hours=COUNTRY_REFRESH_HOURS)).isoformat(timespec="seconds")
+#    rows = store.q("SELECT * FROM game_hosts WHERE at < ? ORDER BY at LIMIT ?", (stale, lookups))
+#    done = 0
+#    for r in rows:
+#        try:
+#            ip = socket.gethostbyname(r["host"])
+#        except OSError:
+#            store.run("UPDATE game_hosts SET ip = NULL, country = NULL, org = NULL, at = ?"
+#                      " WHERE host = ?", (now(), r["host"]))
+#            continue
+#        country, org = (r["country"], r["org"]) if ip == r["ip"] and r["country"] else ip_country(ip)
+#        store.run("UPDATE game_hosts SET ip = ?, country = ?, org = ?, at = ? WHERE host = ?",
+#                  (ip, country, org, now(), r["host"]))
+#        done += 1
+#    return done
+#
+#
+#def game_countries(store):
+#    """[(country, how many game hosts, [game labels])], the most first - which
+#    is the list to read when deciding where another exit would be worth having."""
+#    seen = {}
+#    for r in store.q("SELECT * FROM game_hosts WHERE country IS NOT NULL ORDER BY label"):
+#        where = seen.setdefault(r["country"], {"hosts": 0, "games": []})
+#        where["hosts"] += 1
+#        if r["label"] not in where["games"]:
+#            where["games"].append(r["label"])
+#    return sorted(((c, v["hosts"], v["games"]) for c, v in seen.items()),
+#                  key=lambda x: (-x[1], x[0]))
+#
+#
 #def main_exit_name(store):
 #    return store.setting("main_exit_name", "") or "سرور اصلی"
 #
@@ -5466,6 +5586,7 @@ exit 0
 #            self.store.note_relay(body.get("panel"), body.get("dns"))
 #            self.store.note_pings(self.client_address[0], body.get("pings"))
 #            self.store.note_exit_pings(self.client_address[0], body.get("exit_pings"))
+#            self.store.note_client_rtt(self.client_address[0], body.get("client_rtt"))
 #            # Quotas are evaluated here, on fresh numbers, so a user who runs
 #            # out is off the list this relay is about to be handed.
 #            try:
@@ -5871,6 +5992,16 @@ exit 0
 #    return TLSServer(("0.0.0.0", API_PORT if port is None else port), API, ctx)
 #
 #
+#def watch_games(store):
+#    """Where the games' hosts are, refreshed slowly in the background."""
+#    while True:
+#        try:
+#            refresh_game_hosts(store, CATALOGUE)
+#        except Exception as e:
+#            log(WARN, "game hosts not refreshed: %r" % e)
+#        time.sleep(900)
+#
+#
 #def watch_self(store):
 #    """Sample this machine's own health.
 #
@@ -5904,6 +6035,7 @@ exit 0
 #          % (len(CATALOGUE), DEFAULT_TEMPLATE[0]), flush=True)
 #
 #    threading.Thread(target=watch_self, args=(store,), daemon=True).start()
+#    threading.Thread(target=watch_games, args=(store,), daemon=True).start()
 #
 #    def bye(*_):
 #        sys.exit(0)
@@ -7147,6 +7279,46 @@ exit 0
 #    return True
 #
 #
+## ------------------------------------------------------- what customers see
+## How far each customer is from this relay, taken from the kernel's own
+## numbers for the connections they already have open. Nothing is sent to
+## anybody to measure this: the round trip is what TCP has been measuring all
+## along to decide when to retransmit, and ss reads it out.
+#CLIENT_RTT_MAX = 500
+#
+#
+#def client_rtts():
+#    """{customer's address: {"ms": round trip, "conns": how many}}."""
+#    r = sh("ss", "-Htin", "state", "established", "( sport = :443 or sport = :80 )")
+#    if r.returncode != 0:
+#        return {}
+#    seen, peer = {}, None
+#    for line in (r.stdout or "").splitlines():
+#        if not line[:1].isspace():
+#            # The socket's own line: the far end is the last column.
+#            peer = None
+#            parts = line.split()
+#            if len(parts) >= 2:
+#                ip = parts[-1].rsplit(":", 1)[0].strip("[]")
+#                try:
+#                    if ipaddress.IPv4Address(ip).is_global:
+#                        peer = ip
+#                except ValueError:
+#                    peer = None
+#            continue
+#        # Its details, on the next line: rtt:<average>/<variation>, in ms.
+#        if peer:
+#            m = re.search(r"\brtt:([0-9.]+)/", line)
+#            if m:
+#                seen.setdefault(peer, []).append(float(m.group(1)))
+#            peer = None
+#    out = {}
+#    for ip, times in sorted(seen.items())[:CLIENT_RTT_MAX]:
+#        times.sort()
+#        out[ip] = {"ms": round(times[len(times) // 2], 1), "conns": len(times)}
+#    return out
+#
+#
 #def sync_once():
 #    rows = current_state()
 #    counters = {r["ip"]: r["total"] for r in rows}
@@ -7157,7 +7329,12 @@ exit 0
 #        host = HEALTH.sample()
 #    except Exception as e:
 #        host = {"error": str(e)}
-#    report = {"counters": counters, "host": host,
+#    try:
+#        rtts = client_rtts()
+#    except Exception as e:
+#        log(WARN, "client round trips not read: %s" % e)
+#        rtts = {}
+#    report = {"counters": counters, "host": host, "client_rtt": rtts,
 #              # Where the bot on the exit should send customers: the mini app
 #              # and the payment page are served by this panel, and the DNS
 #              # address they type in is this machine's.
@@ -8946,8 +9123,8 @@ exit 0
 #def page(title, body, cfg, active="", msg=None, msg_kind="good"):
 #    nav = ""
 #    for path, label in (("", "خانه"), ("users", "کاربران"), ("receipts", "رسیدها"),
-#                        ("templates", "قالب‌ها"), ("domains", "دامنه‌ها"),
-#                        ("settings", "تنظیمات"), ("logs", "لاگ")):
+#                        ("monitor", "مانیتورینگ"), ("templates", "قالب‌ها"),
+#                        ("domains", "دامنه‌ها"), ("settings", "تنظیمات"), ("logs", "لاگ")):
 #        cls = " class='on'" if active == path else ""
 #        nav += "<a href='/%s/%s'%s>%s</a>" % (cfg["ADMIN_PATH"], path, cls, label)
 #    banner = ""
@@ -9607,6 +9784,7 @@ exit 0
 #                 "receipts": ("رسیدها", self.receipts),
 #                 "templates": ("قالب‌ها", self.templates),
 #                 "domains": ("دامنه‌ها", self.domains),
+#                 "monitor": ("مانیتورینگ", self.monitor),
 #                 "settings": ("تنظیمات", self.settings),
 #                 "restore": ("بازگردانی", self.restore_page),
 #                 "logs": ("لاگ", self.logs)}
@@ -9653,6 +9831,104 @@ exit 0
 #                       bar(r["disk_used"], r["disk_total"]),
 #                       human(r["rx_bps"]), human(r["tx_bps"]),
 #                       (r["uptime"] or 0) // 86400))
+#            out.append("</table>")
+#        out.append("</div>")
+#        return "".join(out)
+#
+#    def monitor(self):
+#        """What the service looks like from where the customers are.
+#
+#        Three questions, in the order they get asked: how far is each customer
+#        from the relay, how far is each exit from the relay, and where are the
+#        games - which is the one that answers "which country should the next
+#        exit be in".
+#        """
+#        out = []
+#
+#        # -- customers, as the relay's kernel measured them ------------------
+#        rows = STORE.q(
+#            "SELECT c.ip AS ip, c.relay AS relay, c.rtt_ms AS rtt, c.conns AS conns,"
+#            " c.at AS at, u.id AS uid, u.exit_id AS exit_id,"
+#            " COALESCE(u.username, u.first_name, '') AS who"
+#            " FROM client_paths c LEFT JOIN ips i ON i.ip = c.ip"
+#            " LEFT JOIN users u ON u.id = i.user_id ORDER BY c.rtt_ms DESC LIMIT 100")
+#        exits = {str(r["id"]): r["name"] for r in STORE.q("SELECT * FROM exits WHERE active = 1")}
+#        exits["0"] = setting("main_exit_name") or "سرور اصلی"
+#        legs = exit_legs()
+#        out.append("<div class='card'><h2>مشتری‌های فعال (%d)</h2>" % len(rows))
+#        out.append("<p class='muted'>رفت‌وبرگشت از دستگاه مشتری تا رله، همان‌طور که کرنل "
+#                   "رله روی اتصال‌های باز خودش اندازه گرفته — نه پینگ بازی: ترافیک خود "
+#                   "بازی آنلاین از سرویس رد نمی‌شود.</p>")
+#        if not rows:
+#            out.append("<p class='muted'>الان کسی وصل نیست.</p></div>")
+#        else:
+#            out.append("<table><tr><th>مشتری</th><th>آی‌پی</th><th>تا رله</th>"
+#                       "<th>تا خروجی</th><th>جمع</th><th>اتصال</th><th>خروجی</th>"
+#                       "<th>رله</th></tr>")
+#            for r in rows:
+#                eid = effective_exit(r["exit_id"], legs, exits)
+#                leg = legs.get(eid)
+#                total = (round(r["rtt"] + leg) if isinstance(leg, (int, float))
+#                         and isinstance(r["rtt"], (int, float)) else None)
+#                out.append(
+#                    "<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td>"
+#                    "<td>%s</td><td>%d</td><td>%s</td><td><code>%s</code></td></tr>" % (
+#                        html.escape(r["who"] or ("#%d" % r["uid"] if r["uid"] else "—")),
+#                        html.escape(r["ip"]), ms(r["rtt"]), ms(leg), ms(total),
+#                        r["conns"] or 0, html.escape(exits.get(eid, "?")),
+#                        html.escape(r["relay"] or "?")))
+#            out.append("</table><p class='muted'>«جمع» رفت‌وبرگشت مشتری تا خروجی است: "
+#                       "آنچه یک بازی موقع لاگین، فروشگاه و دانلود حس می‌کند.</p></div>")
+#
+#        # -- the exits themselves --------------------------------------------
+#        out.append("<div class='card'><h2>خروجی‌ها</h2>")
+#        if not legs:
+#            out.append("<p class='muted'>هنوز رله‌ای پینگ خروجی‌ها را نفرستاده.</p>")
+#        else:
+#            out.append("<table><tr><th>خروجی</th><th>از رله</th><th>مشتری روی آن</th></tr>")
+#            on = {str(r["exit_id"]): r["c"] for r in STORE.q(
+#                "SELECT exit_id, count(*) c FROM users WHERE status = 'active'"
+#                " AND exit_id IS NOT NULL GROUP BY exit_id")}
+#            for eid, leg in sorted(legs.items(), key=lambda kv: (kv[1] is None, kv[1] or 0)):
+#                out.append("<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+#                    html.escape(exits.get(eid, "#" + eid)), ms(leg), on.get(eid, 0)))
+#            out.append("</table>")
+#        out.append("</div>")
+#
+#        # -- where the games are ---------------------------------------------
+#        hosts = STORE.q("SELECT * FROM game_hosts ORDER BY label, host")
+#        located = [r for r in hosts if r["country"]]
+#        out.append("<div class='card'><h2>سرورهای بازی‌ها کجا هستند</h2>")
+#        out.append("<p class='muted'>هر دامنه از همین سرور (خارج از ایران) resolve شده و "
+#                   "کشور آی‌پی‌اش پرسیده شده. این فهرست می‌گوید خروجی بعدی را در کدام کشور "
+#                   "بگیرید؛ %d از %d دامنه تا حالا مشخص شده.</p>" % (len(located), len(hosts)))
+#        counts = {}
+#        for r in located:
+#            where = counts.setdefault(r["country"], {"hosts": 0, "games": []})
+#            where["hosts"] += 1
+#            if r["label"] not in where["games"]:
+#                where["games"].append(r["label"])
+#        if counts:
+#            out.append("<table><tr><th>کشور</th><th>دامنه</th><th>بازی‌ها</th></tr>")
+#            for country, v in sorted(counts.items(), key=lambda kv: (-kv[1]["hosts"], kv[0])):
+#                out.append("<tr><td><code>%s</code></td><td>%d</td>"
+#                           "<td class='muted'>%s</td></tr>"
+#                           % (html.escape(country), v["hosts"],
+#                              html.escape("، ".join(v["games"]))))
+#            out.append("</table>")
+#        else:
+#            out.append("<p class='muted'>هنوز چیزی پیدا نشده؛ این کار در پس‌زمینه و "
+#                       "کم‌کم انجام می‌شود.</p>")
+#        if hosts:
+#            out.append("<h2 style='margin-top:22px'>دامنه‌به‌دامنه</h2>")
+#            out.append("<table><tr><th>بازی</th><th>دامنه</th><th>آی‌پی</th>"
+#                       "<th>کشور</th><th>شبکه</th></tr>")
+#            for r in hosts:
+#                out.append("<tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td>"
+#                           "<td><code>%s</code></td><td class='muted'>%s</td></tr>" % (
+#                               html.escape(r["label"]), html.escape(r["host"]),
+#                               html.escape(r["ip"] or "—"), html.escape(r["country"] or "—"),
+#                               html.escape(r["org"] or "")))
 #            out.append("</table>")
 #        out.append("</div>")
 #        return "".join(out)
@@ -10452,6 +10728,49 @@ exit 0
 #    out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زیبال از داخل خود "
 #               "ربات، در منوی «🛠 مدیریت»، تنظیم می‌شوند.</p></div>")
 #    return "".join(out)
+#
+#
+#def ms(value):
+#    """A round trip for a table cell: mono, or a dash when there is none."""
+#    if not isinstance(value, (int, float)):
+#        return "<span class='muted'>—</span>"
+#    return "<code>%d ms</code>" % round(value)
+#
+#
+#def exit_legs():
+#    """{exit id: milliseconds from the relay}, from the freshest round a relay
+#    reported. The same numbers the bot sorts its exit list by."""
+#    try:
+#        every = json.loads(setting("relay_exit_pings") or "{}")
+#    except ValueError:
+#        return {}
+#    out = {}
+#    stamp = datetime.now(timezone.utc)
+#    for entry in (every or {}).values():
+#        if not isinstance(entry, dict):
+#            continue
+#        seen = parse_ts(entry.get("at"))
+#        if not seen or (stamp - seen).total_seconds() > 15 * 60:
+#            continue
+#        for eid, p in (entry.get("exits") or {}).items():
+#            value = p.get("ms") if isinstance(p, dict) else None
+#            if isinstance(value, (int, float)) and (eid not in out or value < out[eid]):
+#                out[eid] = value
+#    return out
+#
+#
+#def effective_exit(choice, legs, exits):
+#    """Which exit an account's traffic takes - its own choice while that exit is
+#    active, otherwise the fastest measured. The panel decides this the same way;
+#    this one is for drawing a table without asking it."""
+#    if choice is not None and (choice == 0 or str(choice) in exits):
+#        return str(choice)
+#    best, best_ms = "0", None
+#    for eid in sorted(exits, key=lambda e: int(e)):
+#        value = legs.get(eid)
+#        if isinstance(value, (int, float)) and (best_ms is None or value < best_ms):
+#            best, best_ms = eid, value
+#    return best
 #
 #
 #def set_config_key(key, value):

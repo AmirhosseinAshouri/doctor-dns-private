@@ -256,7 +256,7 @@ class Stray(Rec):
 # view() binds every page method into a dict before it checks membership, so
 # the stand-in needs all of them or it fails for the wrong reason.
 for n in ("lost", "route", "do_GET", "session_ok", "view", "home", "users",
-          "receipts", "templates", "domains", "logs", "restore_page",
+          "receipts", "monitor", "templates", "domains", "logs", "restore_page",
           "send_backup", "send_receipt"):
     setattr(Stray, n, getattr(admin.Admin, n))
 

@@ -60,7 +60,7 @@ certificate naming no console host at all.
 | **Service templates** | which brands a customer's plan routes, down to individual domains; a few groups ship visible but unticked, because routing them breaks the thing they belong to |
 | **Customer panel** | sign up, register an address, see usage, send a payment receipt |
 | **Telegram bot** | the customer panel in Telegram, plus buying a plan - card to card or Zibal - and the operator's receipts, customers, plans and broadcasts |
-| **Operator panel** | customers, templates, domains, host monitoring, backup and restore |
+| **Operator panel** | customers, templates, domains, live monitoring, host health, backup and restore |
 | **TLS** | certificates obtained and renewed automatically, asking for nothing but a domain name |
 
 ## What it looks like
@@ -294,6 +294,29 @@ such an exit directly and says so in `smartdns-logs`.
 The pair's own tunnel is unchanged: relay and main exit, its settings carried
 by the pairing token.
 
+#### Deciding where the next exit goes
+
+The admin panel's **مانیتورینگ** page is that decision, on one screen:
+
+* **Active customers** - every address connected right now, the round trip
+  from their device to the relay, how many connections they have open, which
+  exit they take, the relay→exit leg, and the two added up. The first number
+  is read out of the relay's own kernel (`ss -ti`) on connections the customer
+  already had open, so measuring it costs nothing and probes nobody.
+* **Exits** - each one with the ping the relay last measured and how many
+  customers sit on it.
+* **Where the games' servers are** - each game domain resolved from the exit
+  and the country of the address it resolved to, grouped by country with the
+  games in each. A country that holds a lot of them is where another exit is
+  worth having: from there the same login, store and download traffic has a
+  shorter way to go.
+
+This is not an in-game ping, and no page here claims to be one. Match traffic
+never touches the service - only the store, the login and the downloads do -
+so what these numbers describe is exactly the path the service carries. The
+countries are looked up once per address and kept for a day; the whole list
+fills in over a few hours in the background.
+
 ### Access control
 
 A fresh relay answers everyone. That is not a default anybody chose - it is
@@ -320,8 +343,9 @@ DNS address and the customers' panel, the exit names the operator's panel and
 its password, shown once.
 
 The operator's panel is the whole administrative interface — customers, their
-quotas and speeds, service templates, the domain list, host monitoring,
-payment receipts, and backup and restore. Everything below is for the cases a
+quotas and speeds, service templates, the domain list, live monitoring of
+who is connected and where the games are, host health, payment receipts, and
+backup and restore. Everything below is for the cases a
 web page cannot serve: reading state over ssh, and getting back into a panel
 you can no longer reach.
 

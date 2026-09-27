@@ -34,6 +34,7 @@ import re
 import secrets
 import signal
 import shutil
+import socket
 import sqlite3
 import ssl
 import sys
@@ -256,6 +257,32 @@ CREATE TABLE IF NOT EXISTS outbox (
     attempts   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS outbox_unsent ON outbox(sent_at, id);
+
+-- How far each customer is from the relay they use, as the kernel there
+-- measured it on the connections they already had open. One row per address,
+-- replaced on every sync that sees it, and pruned once it goes quiet: this is
+-- a live picture, not a history.
+CREATE TABLE IF NOT EXISTS client_paths (
+    ip      TEXT PRIMARY KEY,
+    relay   TEXT NOT NULL,
+    rtt_ms  REAL,
+    conns   INTEGER NOT NULL DEFAULT 0,
+    at      TEXT NOT NULL
+);
+
+-- Where each game's hosts actually are: what the name resolves to from this
+-- machine, and which country that address is in. Looked up here rather than on
+-- a relay, because a relay in Iran is answered by whatever is nearest to Iran -
+-- and because the question this answers is where an exit would be worth having.
+CREATE TABLE IF NOT EXISTS game_hosts (
+    host    TEXT PRIMARY KEY,
+    service TEXT NOT NULL,
+    label   TEXT NOT NULL,
+    ip      TEXT,
+    country TEXT,
+    org     TEXT,
+    at      TEXT NOT NULL
+);
 
 -- Extra exits: servers abroad, installed as "extra exit", that carry traffic
 -- and nothing else - no database, no bot. The main exit is not a row: it is
@@ -852,6 +879,28 @@ class Store:
 
     def active_exits(self):
         return self.q("SELECT * FROM exits WHERE active = 1 ORDER BY id")
+
+    def note_client_rtt(self, relay, rtts):
+        """Keep how far each customer is from the relay, latest reading only."""
+        if not isinstance(rtts, dict):
+            return
+        stamp = now()
+        for ip, v in list(rtts.items())[:500]:
+            if not (isinstance(ip, str) and valid_ip(ip) and isinstance(v, dict)):
+                continue
+            ms, conns = v.get("ms"), v.get("conns")
+            if not isinstance(ms, (int, float)) or not 0 <= ms < 60000:
+                continue
+            self.run(
+                "INSERT INTO client_paths (ip, relay, rtt_ms, conns, at)"
+                " VALUES (?, ?, ?, ?, ?) ON CONFLICT(ip) DO UPDATE SET"
+                " relay = excluded.relay, rtt_ms = excluded.rtt_ms,"
+                " conns = excluded.conns, at = excluded.at",
+                (ip, relay, float(ms),
+                 int(conns) if isinstance(conns, int) and 0 <= conns < 100000 else 0, stamp))
+        # A customer who has closed everything stops being live.
+        self.run("DELETE FROM client_paths WHERE at < ?",
+                 ((datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(timespec="seconds"),))
 
     def note_exit_pings(self, relay, pings):
         """Keep how fast each exit answered one relay, the latest round only."""
@@ -1473,6 +1522,77 @@ def parse_exit_tunnel(line):
     return transport, port, token
 
 
+# Where the games are. Asked of this machine, which is abroad, so the answer is
+# the edge a server outside Iran is sent to - which is the one an exit would
+# reach. The country comes from a free lookup, once per address, and is kept:
+# addresses move rarely and every extra request is a request this machine did
+# not need to make.
+COUNTRY_SERVICES = ("https://ipwho.is/%s", "http://ip-api.com/json/%s")
+COUNTRY_REFRESH_HOURS = 24
+COUNTRY_LOOKUPS_PER_PASS = 20
+
+
+def ip_country(ip, timeout=8):
+    """(country code, owner) for an address, or (None, None)."""
+    for url in COUNTRY_SERVICES:
+        try:
+            with urllib.request.urlopen(url % ip, timeout=timeout) as res:
+                data = json.loads(res.read() or b"{}")
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        code = data.get("country_code") or data.get("countryCode")
+        org = data.get("org") or data.get("isp") or (data.get("connection") or {}).get("org")
+        if isinstance(code, str) and re.fullmatch(r"[A-Za-z]{2}", code):
+            return code.upper(), (str(org)[:60] if org else None)
+    return None, None
+
+
+def refresh_game_hosts(store, catalogue, lookups=COUNTRY_LOOKUPS_PER_PASS):
+    """Resolve the games' hosts from here and note where they are.
+
+    A few at a time, oldest first: nothing depends on this being quick, and a
+    burst of lookups is a good way to be refused by whoever answers them.
+    """
+    targets = ping_targets(catalogue)
+    for key, info in sorted(targets.items()):
+        for host in info["hosts"]:
+            store.run("INSERT INTO game_hosts (host, service, label, at) VALUES (?, ?, ?, ?)"
+                      " ON CONFLICT(host) DO UPDATE SET service = excluded.service,"
+                      " label = excluded.label",
+                      (host, key, info["label"], "1970-01-01T00:00:00+00:00"))
+    stale = (datetime.now(timezone.utc)
+             - timedelta(hours=COUNTRY_REFRESH_HOURS)).isoformat(timespec="seconds")
+    rows = store.q("SELECT * FROM game_hosts WHERE at < ? ORDER BY at LIMIT ?", (stale, lookups))
+    done = 0
+    for r in rows:
+        try:
+            ip = socket.gethostbyname(r["host"])
+        except OSError:
+            store.run("UPDATE game_hosts SET ip = NULL, country = NULL, org = NULL, at = ?"
+                      " WHERE host = ?", (now(), r["host"]))
+            continue
+        country, org = (r["country"], r["org"]) if ip == r["ip"] and r["country"] else ip_country(ip)
+        store.run("UPDATE game_hosts SET ip = ?, country = ?, org = ?, at = ? WHERE host = ?",
+                  (ip, country, org, now(), r["host"]))
+        done += 1
+    return done
+
+
+def game_countries(store):
+    """[(country, how many game hosts, [game labels])], the most first - which
+    is the list to read when deciding where another exit would be worth having."""
+    seen = {}
+    for r in store.q("SELECT * FROM game_hosts WHERE country IS NOT NULL ORDER BY label"):
+        where = seen.setdefault(r["country"], {"hosts": 0, "games": []})
+        where["hosts"] += 1
+        if r["label"] not in where["games"]:
+            where["games"].append(r["label"])
+    return sorted(((c, v["hosts"], v["games"]) for c, v in seen.items()),
+                  key=lambda x: (-x[1], x[0]))
+
+
 def main_exit_name(store):
     return store.setting("main_exit_name", "") or "سرور اصلی"
 
@@ -1970,6 +2090,7 @@ class API(http.server.BaseHTTPRequestHandler):
             self.store.note_relay(body.get("panel"), body.get("dns"))
             self.store.note_pings(self.client_address[0], body.get("pings"))
             self.store.note_exit_pings(self.client_address[0], body.get("exit_pings"))
+            self.store.note_client_rtt(self.client_address[0], body.get("client_rtt"))
             # Quotas are evaluated here, on fresh numbers, so a user who runs
             # out is off the list this relay is about to be handed.
             try:
@@ -2375,6 +2496,16 @@ def make_api_server(ctx, port=None):
     return TLSServer(("0.0.0.0", API_PORT if port is None else port), API, ctx)
 
 
+def watch_games(store):
+    """Where the games' hosts are, refreshed slowly in the background."""
+    while True:
+        try:
+            refresh_game_hosts(store, CATALOGUE)
+        except Exception as e:
+            log(WARN, "game hosts not refreshed: %r" % e)
+        time.sleep(900)
+
+
 def watch_self(store):
     """Sample this machine's own health.
 
@@ -2408,6 +2539,7 @@ def main():
           % (len(CATALOGUE), DEFAULT_TEMPLATE[0]), flush=True)
 
     threading.Thread(target=watch_self, args=(store,), daemon=True).start()
+    threading.Thread(target=watch_games, args=(store,), daemon=True).start()
 
     def bye(*_):
         sys.exit(0)

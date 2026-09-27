@@ -1194,6 +1194,46 @@ def apply_exits(exits, assignment, tunnels=None):
     return True
 
 
+# ------------------------------------------------------- what customers see
+# How far each customer is from this relay, taken from the kernel's own
+# numbers for the connections they already have open. Nothing is sent to
+# anybody to measure this: the round trip is what TCP has been measuring all
+# along to decide when to retransmit, and ss reads it out.
+CLIENT_RTT_MAX = 500
+
+
+def client_rtts():
+    """{customer's address: {"ms": round trip, "conns": how many}}."""
+    r = sh("ss", "-Htin", "state", "established", "( sport = :443 or sport = :80 )")
+    if r.returncode != 0:
+        return {}
+    seen, peer = {}, None
+    for line in (r.stdout or "").splitlines():
+        if not line[:1].isspace():
+            # The socket's own line: the far end is the last column.
+            peer = None
+            parts = line.split()
+            if len(parts) >= 2:
+                ip = parts[-1].rsplit(":", 1)[0].strip("[]")
+                try:
+                    if ipaddress.IPv4Address(ip).is_global:
+                        peer = ip
+                except ValueError:
+                    peer = None
+            continue
+        # Its details, on the next line: rtt:<average>/<variation>, in ms.
+        if peer:
+            m = re.search(r"\brtt:([0-9.]+)/", line)
+            if m:
+                seen.setdefault(peer, []).append(float(m.group(1)))
+            peer = None
+    out = {}
+    for ip, times in sorted(seen.items())[:CLIENT_RTT_MAX]:
+        times.sort()
+        out[ip] = {"ms": round(times[len(times) // 2], 1), "conns": len(times)}
+    return out
+
+
 def sync_once():
     rows = current_state()
     counters = {r["ip"]: r["total"] for r in rows}
@@ -1204,7 +1244,12 @@ def sync_once():
         host = HEALTH.sample()
     except Exception as e:
         host = {"error": str(e)}
-    report = {"counters": counters, "host": host,
+    try:
+        rtts = client_rtts()
+    except Exception as e:
+        log(WARN, "client round trips not read: %s" % e)
+        rtts = {}
+    report = {"counters": counters, "host": host, "client_rtt": rtts,
               # Where the bot on the exit should send customers: the mini app
               # and the payment page are served by this panel, and the DNS
               # address they type in is this machine's.
