@@ -853,36 +853,6 @@ class Store:
     def active_exits(self):
         return self.q("SELECT * FROM exits WHERE active = 1 ORDER BY id")
 
-    def note_exit_game_pings(self, relay, pings):
-        """Keep how each game answered through each exit, the latest round only.
-
-        Checked field by field like the rest: customers read these in the bot,
-        and a relay is trusted to report numbers, not to write into chats.
-        """
-        if not isinstance(pings, dict) or not pings:
-            return
-        exits = {}
-        for eid, games in list(pings.items())[:32]:
-            if not (isinstance(eid, str) and eid.isdigit() and isinstance(games, dict)):
-                continue
-            kept = {}
-            for key, g in list(games.items())[:64]:
-                if not (isinstance(key, str) and re.fullmatch(r"[a-z0-9_-]{1,32}", key)
-                        and isinstance(g, dict)):
-                    continue
-                ms = g.get("ms")
-                kept[key] = {
-                    "label": str(g.get("label") or key)[:40],
-                    "ms": float(ms) if isinstance(ms, (int, float)) and 0 <= ms < 60000 else None,
-                    "state": str(g.get("state") or "")[:16]}
-            if kept:
-                exits[eid] = kept
-        if not exits:
-            return
-        every = exit_game_pings(self)
-        every[relay] = {"at": now(), "exits": exits}
-        self.set_setting("relay_exit_game_pings", json.dumps(every, ensure_ascii=False))
-
     def note_exit_pings(self, relay, pings):
         """Keep how fast each exit answered one relay, the latest round only."""
         if not isinstance(pings, dict) or not pings:
@@ -1516,32 +1486,6 @@ def exit_pings(store):
     return every if isinstance(every, dict) else {}
 
 
-def exit_game_pings(store):
-    """{relay: {"at", "exits": {exit id: {game: {...}}}}}, the latest from each."""
-    try:
-        every = json.loads(store.setting("relay_exit_game_pings", "") or "{}")
-    except ValueError:
-        return {}
-    return every if isinstance(every, dict) else {}
-
-
-def games_through_exit(store, exit_id):
-    """{game: {"label", "ms", "state"}} for one exit, from the freshest round
-    any relay reported - and ("", 0) when nothing recent names that exit."""
-    best, seen_at = {}, None
-    stamp = datetime.now(timezone.utc)
-    for entry in exit_game_pings(store).values():
-        if not isinstance(entry, dict):
-            continue
-        seen = parse_ts(entry.get("at"))
-        if not seen or (stamp - seen).total_seconds() > PING_STALE_MINUTES * 60:
-            continue
-        games = (entry.get("exits") or {}).get(str(exit_id))
-        if isinstance(games, dict) and games and (seen_at is None or seen > seen_at):
-            best, seen_at = games, seen
-    return best, seen_at
-
-
 def fresh_exit_pings(store, relay=None):
     """{exit id: fastest ms} from recent rounds - one relay's, or the best of all.
 
@@ -2026,8 +1970,6 @@ class API(http.server.BaseHTTPRequestHandler):
             self.store.note_relay(body.get("panel"), body.get("dns"))
             self.store.note_pings(self.client_address[0], body.get("pings"))
             self.store.note_exit_pings(self.client_address[0], body.get("exit_pings"))
-            self.store.note_exit_game_pings(self.client_address[0],
-                                            body.get("exit_game_pings"))
             # Quotas are evaluated here, on fresh numbers, so a user who runs
             # out is off the list this relay is about to be handed.
             try:

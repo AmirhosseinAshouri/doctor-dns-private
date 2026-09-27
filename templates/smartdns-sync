@@ -799,12 +799,6 @@ DNS_PORT = 53
 FILTERED_PREFIX = "10.10.34."
 PING_TARGETS = {}       # what to ping, from the exit
 PINGS = {}              # the last round, until the next sync takes it
-# How long a game's server may take to answer through an exit. Longer than a
-# plain connection: this one crosses the relay, the exit and whatever is
-# between the exit and the game.
-THROUGH_TIMEOUT = 4.0
-EXIT_ROUTES = {}        # exit id -> (host, port) this relay reaches it at
-EXIT_GAME_PINGS = {}    # the last round of game pings through each exit
 PING_LOCK = threading.Lock()
 
 
@@ -947,15 +941,6 @@ def ping_loop():
                 EXIT_PINGS.update(measured)
         except Exception as e:
             log(WARN, "exit pings failed: %s" % e)
-        try:
-            with PING_LOCK:
-                routes = dict(EXIT_ROUTES)
-            through = ping_through_exits(targets, routes) if targets and routes else {}
-            with PING_LOCK:
-                EXIT_GAME_PINGS.clear()
-                EXIT_GAME_PINGS.update(through)
-        except Exception as e:
-            log(WARN, "game pings through the exits failed: %s" % e)
         time.sleep(PING_EVERY)
 
 
@@ -1004,89 +989,6 @@ def clean_exits(exits):
                     and isinstance(token, str) and re.fullmatch(r"[0-9a-f]{16,64}", token)):
                 kept["tunnel"] = {"transport": transport, "port": port, "token": token}
         out[eid] = kept
-    return out
-
-
-def time_through(endpoint, host):
-    """(milliseconds, state) for reaching `host` the way a customer does.
-
-    A TLS handshake to the exit's proxy with the game's name in it: the exit
-    reads that name, opens its own connection to the game and hands the two
-    ends together, so what is timed is the whole path a customer's first
-    packet takes - and, where there is one, the tunnel as well. The
-    certificate is the game's own and is not checked: nothing here reads or
-    sends anything inside the session.
-    """
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    start = time.monotonic()
-    try:
-        raw = socket.create_connection(endpoint, timeout=THROUGH_TIMEOUT)
-    except OSError:
-        return None, "no-exit"
-    try:
-        tls = ctx.wrap_socket(raw, server_hostname=host)
-        ms = round((time.monotonic() - start) * 1000, 1)
-        tls.close()
-        return ms, "ok"
-    except (ssl.SSLError, OSError):
-        return None, "no-answer"
-    finally:
-        try:
-            raw.close()
-        except OSError:
-            pass
-
-
-def ping_through_exits(targets, routes):
-    """One game host per exit: {exit id: {game: {"label", "ms", "state"}}}.
-
-    One host, not all of them, because this is asked of every exit: the first
-    of each game's names, which is the one the service is known by.
-    """
-    jobs = []
-    for eid, endpoint in sorted(routes.items()):
-        for key, info in sorted(targets.items()):
-            hosts = (info.get("hosts") or [])[:1]
-            if hosts:
-                jobs.append((eid, key, info.get("label") or key, endpoint, hosts[0]))
-    out = {}
-    if not jobs:
-        return out
-
-    def one(job):
-        eid, key, label, endpoint, host = job
-        ms, state = time_through(endpoint, host)
-        return eid, key, {"label": label, "ms": ms, "state": state}
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
-        for eid, key, res in pool.map(one, jobs):
-            out.setdefault(eid, {})[key] = res
-    return out
-
-
-def note_exit_routes(exits, tunnels):
-    """Where this relay reaches each exit: its tunnel's end when it has one,
-    the exit itself when it does not, and the same for this relay's own exit -
-    which is exit 0 wherever an exit is named."""
-    routes = {}
-    if (CFG or {}).get("EXIT_IP"):
-        routes["0"] = (("127.0.0.1", 18443) if CFG.get("TUNNEL") == "backpack"
-                       else (CFG["EXIT_IP"], 443))
-    for eid, e in exits.items():
-        routes[eid] = (("127.0.0.1", tunnels[eid][0]) if eid in (tunnels or {})
-                       else (e["ip"], 443))
-    with PING_LOCK:
-        EXIT_ROUTES.clear()
-        EXIT_ROUTES.update(routes)
-    return routes
-
-
-def take_exit_game_pings():
-    with PING_LOCK:
-        out = {eid: dict(games) for eid, games in EXIT_GAME_PINGS.items()}
-        EXIT_GAME_PINGS.clear()
     return out
 
 
@@ -1315,9 +1217,6 @@ def sync_once():
     exit_pings = take_exit_pings()
     if exit_pings:
         report["exit_pings"] = exit_pings
-    through = take_exit_game_pings()
-    if through:
-        report["exit_game_pings"] = through
     answer = post("/sync", report)
     note_ping_targets(answer.get("ping_targets"))
     exits = note_exit_targets(answer.get("exits"))
@@ -1358,10 +1257,6 @@ def sync_once():
         tunnels = apply_exit_tunnels(exits)
         apply_exits(exits, {a["ip"]: str(a.get("exit") or "")
                             for a in answer.get("allowed") or [] if a.get("ip")}, tunnels)
-        # Where each exit is reached, for the next round of game pings: the
-        # same endpoints nginx was just pointed at, so what is measured is
-        # what customers are actually sent through.
-        note_exit_routes(exits, tunnels)
     except Exception as e:
         log_exception("exits failed: %s" % e)
 
