@@ -466,8 +466,8 @@ def footer_html():
 def page(title, body, cfg, active="", msg=None, msg_kind="good"):
     nav = ""
     for path, label in (("", "خانه"), ("users", "کاربران"), ("receipts", "رسیدها"),
-                        ("templates", "قالب‌ها"), ("domains", "دامنه‌ها"),
-                        ("settings", "تنظیمات"), ("logs", "لاگ")):
+                        ("monitor", "مانیتورینگ"), ("templates", "قالب‌ها"),
+                        ("domains", "دامنه‌ها"), ("settings", "تنظیمات"), ("logs", "لاگ")):
         cls = " class='on'" if active == path else ""
         nav += "<a href='/%s/%s'%s>%s</a>" % (cfg["ADMIN_PATH"], path, cls, label)
     banner = ""
@@ -1127,6 +1127,7 @@ class Admin(http.server.BaseHTTPRequestHandler):
                  "receipts": ("رسیدها", self.receipts),
                  "templates": ("قالب‌ها", self.templates),
                  "domains": ("دامنه‌ها", self.domains),
+                 "monitor": ("مانیتورینگ", self.monitor),
                  "settings": ("تنظیمات", self.settings),
                  "restore": ("بازگردانی", self.restore_page),
                  "logs": ("لاگ", self.logs)}
@@ -1173,6 +1174,104 @@ class Admin(http.server.BaseHTTPRequestHandler):
                        bar(r["disk_used"], r["disk_total"]),
                        human(r["rx_bps"]), human(r["tx_bps"]),
                        (r["uptime"] or 0) // 86400))
+            out.append("</table>")
+        out.append("</div>")
+        return "".join(out)
+
+    def monitor(self):
+        """What the service looks like from where the customers are.
+
+        Three questions, in the order they get asked: how far is each customer
+        from the relay, how far is each exit from the relay, and where are the
+        games - which is the one that answers "which country should the next
+        exit be in".
+        """
+        out = []
+
+        # -- customers, as the relay's kernel measured them ------------------
+        rows = STORE.q(
+            "SELECT c.ip AS ip, c.relay AS relay, c.rtt_ms AS rtt, c.conns AS conns,"
+            " c.at AS at, u.id AS uid, u.exit_id AS exit_id,"
+            " COALESCE(u.username, u.first_name, '') AS who"
+            " FROM client_paths c LEFT JOIN ips i ON i.ip = c.ip"
+            " LEFT JOIN users u ON u.id = i.user_id ORDER BY c.rtt_ms DESC LIMIT 100")
+        exits = {str(r["id"]): r["name"] for r in STORE.q("SELECT * FROM exits WHERE active = 1")}
+        exits["0"] = setting("main_exit_name") or "سرور اصلی"
+        legs = exit_legs()
+        out.append("<div class='card'><h2>مشتری‌های فعال (%d)</h2>" % len(rows))
+        out.append("<p class='muted'>رفت‌وبرگشت از دستگاه مشتری تا رله، همان‌طور که کرنل "
+                   "رله روی اتصال‌های باز خودش اندازه گرفته — نه پینگ بازی: ترافیک خود "
+                   "بازی آنلاین از سرویس رد نمی‌شود.</p>")
+        if not rows:
+            out.append("<p class='muted'>الان کسی وصل نیست.</p></div>")
+        else:
+            out.append("<table><tr><th>مشتری</th><th>آی‌پی</th><th>تا رله</th>"
+                       "<th>تا خروجی</th><th>جمع</th><th>اتصال</th><th>خروجی</th>"
+                       "<th>رله</th></tr>")
+            for r in rows:
+                eid = effective_exit(r["exit_id"], legs, exits)
+                leg = legs.get(eid)
+                total = (round(r["rtt"] + leg) if isinstance(leg, (int, float))
+                         and isinstance(r["rtt"], (int, float)) else None)
+                out.append(
+                    "<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td>"
+                    "<td>%s</td><td>%d</td><td>%s</td><td><code>%s</code></td></tr>" % (
+                        html.escape(r["who"] or ("#%d" % r["uid"] if r["uid"] else "—")),
+                        html.escape(r["ip"]), ms(r["rtt"]), ms(leg), ms(total),
+                        r["conns"] or 0, html.escape(exits.get(eid, "?")),
+                        html.escape(r["relay"] or "?")))
+            out.append("</table><p class='muted'>«جمع» رفت‌وبرگشت مشتری تا خروجی است: "
+                       "آنچه یک بازی موقع لاگین، فروشگاه و دانلود حس می‌کند.</p></div>")
+
+        # -- the exits themselves --------------------------------------------
+        out.append("<div class='card'><h2>خروجی‌ها</h2>")
+        if not legs:
+            out.append("<p class='muted'>هنوز رله‌ای پینگ خروجی‌ها را نفرستاده.</p>")
+        else:
+            out.append("<table><tr><th>خروجی</th><th>از رله</th><th>مشتری روی آن</th></tr>")
+            on = {str(r["exit_id"]): r["c"] for r in STORE.q(
+                "SELECT exit_id, count(*) c FROM users WHERE status = 'active'"
+                " AND exit_id IS NOT NULL GROUP BY exit_id")}
+            for eid, leg in sorted(legs.items(), key=lambda kv: (kv[1] is None, kv[1] or 0)):
+                out.append("<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+                    html.escape(exits.get(eid, "#" + eid)), ms(leg), on.get(eid, 0)))
+            out.append("</table>")
+        out.append("</div>")
+
+        # -- where the games are ---------------------------------------------
+        hosts = STORE.q("SELECT * FROM game_hosts ORDER BY label, host")
+        located = [r for r in hosts if r["country"]]
+        out.append("<div class='card'><h2>سرورهای بازی‌ها کجا هستند</h2>")
+        out.append("<p class='muted'>هر دامنه از همین سرور (خارج از ایران) resolve شده و "
+                   "کشور آی‌پی‌اش پرسیده شده. این فهرست می‌گوید خروجی بعدی را در کدام کشور "
+                   "بگیرید؛ %d از %d دامنه تا حالا مشخص شده.</p>" % (len(located), len(hosts)))
+        counts = {}
+        for r in located:
+            where = counts.setdefault(r["country"], {"hosts": 0, "games": []})
+            where["hosts"] += 1
+            if r["label"] not in where["games"]:
+                where["games"].append(r["label"])
+        if counts:
+            out.append("<table><tr><th>کشور</th><th>دامنه</th><th>بازی‌ها</th></tr>")
+            for country, v in sorted(counts.items(), key=lambda kv: (-kv[1]["hosts"], kv[0])):
+                out.append("<tr><td><code>%s</code></td><td>%d</td>"
+                           "<td class='muted'>%s</td></tr>"
+                           % (html.escape(country), v["hosts"],
+                              html.escape("، ".join(v["games"]))))
+            out.append("</table>")
+        else:
+            out.append("<p class='muted'>هنوز چیزی پیدا نشده؛ این کار در پس‌زمینه و "
+                       "کم‌کم انجام می‌شود.</p>")
+        if hosts:
+            out.append("<h2 style='margin-top:22px'>دامنه‌به‌دامنه</h2>")
+            out.append("<table><tr><th>بازی</th><th>دامنه</th><th>آی‌پی</th>"
+                       "<th>کشور</th><th>شبکه</th></tr>")
+            for r in hosts:
+                out.append("<tr><td>%s</td><td><code>%s</code></td><td><code>%s</code></td>"
+                           "<td><code>%s</code></td><td class='muted'>%s</td></tr>" % (
+                               html.escape(r["label"]), html.escape(r["host"]),
+                               html.escape(r["ip"] or "—"), html.escape(r["country"] or "—"),
+                               html.escape(r["org"] or "")))
             out.append("</table>")
         out.append("</div>")
         return "".join(out)
@@ -1972,6 +2071,49 @@ def bot_card():
     out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زیبال از داخل خود "
                "ربات، در منوی «🛠 مدیریت»، تنظیم می‌شوند.</p></div>")
     return "".join(out)
+
+
+def ms(value):
+    """A round trip for a table cell: mono, or a dash when there is none."""
+    if not isinstance(value, (int, float)):
+        return "<span class='muted'>—</span>"
+    return "<code>%d ms</code>" % round(value)
+
+
+def exit_legs():
+    """{exit id: milliseconds from the relay}, from the freshest round a relay
+    reported. The same numbers the bot sorts its exit list by."""
+    try:
+        every = json.loads(setting("relay_exit_pings") or "{}")
+    except ValueError:
+        return {}
+    out = {}
+    stamp = datetime.now(timezone.utc)
+    for entry in (every or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        seen = parse_ts(entry.get("at"))
+        if not seen or (stamp - seen).total_seconds() > 15 * 60:
+            continue
+        for eid, p in (entry.get("exits") or {}).items():
+            value = p.get("ms") if isinstance(p, dict) else None
+            if isinstance(value, (int, float)) and (eid not in out or value < out[eid]):
+                out[eid] = value
+    return out
+
+
+def effective_exit(choice, legs, exits):
+    """Which exit an account's traffic takes - its own choice while that exit is
+    active, otherwise the fastest measured. The panel decides this the same way;
+    this one is for drawing a table without asking it."""
+    if choice is not None and (choice == 0 or str(choice) in exits):
+        return str(choice)
+    best, best_ms = "0", None
+    for eid in sorted(exits, key=lambda e: int(e)):
+        value = legs.get(eid)
+        if isinstance(value, (int, float)) and (best_ms is None or value < best_ms):
+            best, best_ms = eid, value
+    return best
 
 
 def set_config_key(key, value):
