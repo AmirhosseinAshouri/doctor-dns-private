@@ -52,12 +52,12 @@ certificate naming no console host at all.
 
 | | |
 |---|---|
-| **Routing** | dnsmasq hijacks a list of ~480 sanctioned domains; AAAA answers are filtered so clients cannot route around the proxy |
-| **Games** | PlayStation, Xbox and Steam storefronts and downloads; EA, Epic; STUN/TURN on the relay so console NAT detection still works |
+| **Routing** | dnsmasq hijacks a list of ~767 sanctioned domains; AAAA answers are filtered so clients cannot route around the proxy |
+| **Games** | PlayStation, Xbox, Nintendo and Steam storefronts and downloads; Epic, EA, Blizzard, Riot, Ubisoft, Rockstar, Supercell, PUBG Mobile and 140-odd titles besides; the backends that must stay direct - Call of Duty's Demonware, EA's redirectors, voice over UDP, Steam's own ports - are kept out of the hijack; STUN/TURN on the relay so console NAT detection still works |
 | **Access control** | an nftables allowlist keyed on the customer's address, with per-address byte counters in the kernel |
 | **Quotas** | monthly or one-off, with warnings at 80% and 95% and automatic cutoff |
 | **Speed limits** | a per-customer download cap, shaped with htb + fq_codel rather than by dropping packets |
-| **Service templates** | which brands a customer's plan routes, down to individual domains; a few groups ship visible but unticked, because routing them breaks the thing they belong to |
+| **Service templates** | which brands a customer's plan routes, down to individual domains; seven groups ship visible but unticked, each saying what routing it would break |
 | **Customer panel** | sign up, register an address, see usage, send a payment receipt |
 | **Telegram bot** | the customer panel in Telegram, plus buying a plan - card to card or Zibal - and the operator's receipts, customers, plans and broadcasts |
 | **Operator panel** | customers, templates, domains, live monitoring, host health, backup and restore |
@@ -771,6 +771,11 @@ reach the service from.
   a pinned hash, and runs them. Thank you, Amin.
 - The exit's nginx configuration started from
   [rohammosalli/smart-dns](https://github.com/rohammosalli/smart-dns).
+- This is a fork of **[mehdi047/doctor-dns](https://github.com/mehdi047/doctor-dns)**,
+  which the service's two halves come from. The domain catalogue
+  (`domains/services.json`, `domains/domains.txt`) and the bypass rules
+  (`common/bypass.conf`) are kept in sync with it - last taken from its 0.9.1 -
+  because that is where the testing behind them happens. Thank you, Mehdi.
 
 ---
 

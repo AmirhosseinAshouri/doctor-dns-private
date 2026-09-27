@@ -1464,8 +1464,13 @@ def telegram_init_data(token, raw, max_age=None):
 # The catalogue's games, whose domains the relays ping so that customers can see
 # how each game's servers answer from Iran. The relay pings, not this machine:
 # this one is abroad, and its ping says nothing about an Iranian line.
+# The platforms, stores and studios whose own hosts are worth timing. The
+# catalogue's genre sections - shooters, co-op, anime - are buckets of many
+# unrelated titles on unrelated networks, and one number over four of their
+# domains would not be any game's ping, so they are left out on purpose.
 GAME_SERVICES = ("playstation", "xbox", "nintendo", "steam", "epic", "ea", "blizzard",
-                 "ubisoft", "riot", "rockstar", "bethesda", "gog", "roblox", "minecraft")
+                 "ubisoft", "riot", "rockstar", "bethesda", "gog", "roblox", "minecraft",
+                 "supercell")
 PING_HOSTS_PER_GAME = 4
 # Older than this and the bot says so: the relay measures every five minutes,
 # so a quarter of an hour without news means it has stopped.

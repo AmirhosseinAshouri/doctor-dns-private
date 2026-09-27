@@ -45,12 +45,14 @@ case "${1:-}" in
     [ $# -gt 0 ] || { echo "usage: smartdns bypass <domain> [domain ...]"; exit 1; }
     for d in "$@"; do
       d=$(echo "$d" | tr 'A-Z' 'a-z' | sed 's#^https\?://##; s#/.*##; s/^\.//')
-      if grep -qxF "server=/$d/1.1.1.1" "$BYPASS"; then
+      # Any rule for the name counts, whichever resolvers it names: the
+      # shipped list says "#", which is dnsmasq for the upstreams this
+      # resolver already has, and matching only one spelling of it would
+      # append a second rule for a name that is bypassed already.
+      if grep -qE "^server=/$d/" "$BYPASS"; then
         echo "already bypassed: $d"
       else
-        printf 'server=/%s/1.1.1.1
-server=/%s/8.8.8.8
-' "$d" "$d" >> "$BYPASS"
+        printf 'server=/%s/#\n' "$d" >> "$BYPASS"
         echo "bypassed (resolves to its real IP now): $d"
       fi
     done

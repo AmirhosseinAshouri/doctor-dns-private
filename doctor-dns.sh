@@ -2247,10 +2247,22 @@ exit 0
 ##    pointing such a name at it makes the client fire SYNs into a void and retry
 ##    forever. EA's game stack is full of these:
 ##
-##      gosredirector.ea.com   TCP 42130 / 42230   game-server redirector
+##      gosredirector.ea.com   TCP 42130 / 42230   game-server redirector (FC 25)
+##      blazeredirector.ea.com the same, for FC 26 (spring25.client.blazeredirector...)
+##                             - and if it is routed, the redirector sees the exit's
+##                             address while the Blaze servers it hands out see
+##                             Iran's, and EA refuses the sign-in (reported with a
+##                             German exit: "you must be signed in to PSN and EA")
 ##      blaze.ea.com           TCP 15000-15100     the actual game servers
 ##      gameservices.ea.com    TCP 10010, 11000    QoS coordinator, match stats
 ##      tnt-ea.com             TCP 8095            realtime messaging
+##
+##    Call of Duty's network layer is the same kind of thing: Demonware, whose
+##    lobby (lsg.*) and STUN (genesis.stun.*) are not on 443. Routed, MW III
+##    and Warzone stop at "Networking failed to start" (HUENEME - NEGEV);
+##    resolved directly they come up (reported from a PS5 in Tehran, 0.8.5).
+##
+##      demonware.net          lsg, genesis.stun, loginservice, user-consent
 ##
 ## 2. The service is reachable from Iran anyway, and routing it costs something.
 ##    ps5.np.playstation.net is the console's STUN server as well as a PSN API
@@ -2295,26 +2307,41 @@ exit 0
 ##
 ## Add more with:  smartdns bypass <domain>
 #
-#server=/gosredirector.ea.com/1.1.1.1
-#server=/gosredirector.ea.com/8.8.8.8
-#server=/blaze.ea.com/1.1.1.1
-#server=/blaze.ea.com/8.8.8.8
-#server=/gameservices.ea.com/1.1.1.1
-#server=/gameservices.ea.com/8.8.8.8
-#server=/tnt-ea.com/1.1.1.1
-#server=/tnt-ea.com/8.8.8.8
-#server=/np.playstation.net/1.1.1.1
-#server=/np.playstation.net/8.8.8.8
-#server=/np.dl.playstation.net/1.1.1.1
-#server=/np.dl.playstation.net/8.8.8.8
-#server=/ol.epicgames.com/1.1.1.1
-#server=/ol.epicgames.com/8.8.8.8
-#server=/ogs.live.on.epicgames.com/1.1.1.1
-#server=/ogs.live.on.epicgames.com/8.8.8.8
-#server=/edea.live.use1a.on.epicgames.com/1.1.1.1
-#server=/edea.live.use1a.on.epicgames.com/8.8.8.8
-#server=/core.windows.net/1.1.1.1
-#server=/core.windows.net/8.8.8.8
+#server=/gosredirector.ea.com/#
+#server=/blazeredirector.ea.com/#
+#server=/blaze.ea.com/#
+#server=/gameservices.ea.com/#
+#server=/tnt-ea.com/#
+#server=/demonware.net/#
+#server=/np.playstation.net/#
+#server=/np.dl.playstation.net/#
+#server=/ol.epicgames.com/#
+#server=/ogs.live.on.epicgames.com/#
+#server=/edea.live.use1a.on.epicgames.com/#
+#server=/core.windows.net/#
+#
+## Voice, and two control channels, none of which the relay can carry.
+##
+##   discord.media   Discord voice and video: WebRTC over UDP, and the name the
+##                   client measures every voice region with - routed, every
+##                   region measures as the distance to the exit and it picks
+##                   the wrong continent.
+##   vivox.com       voice for Valorant, League of Legends and Rainbow Six: RTP
+##                   over UDP.
+##   steamserver.net Steam's connection managers, which is where a client signs
+##                   in. Asked for its own list, Steam answers with 83 bare
+##                   addresses on 27017 - no name at all, so nothing DNS does
+##                   reaches them - and 200 WebSocket managers under this zone,
+##                   on 27018 to 27024 and, for 19 of the 200, on 443. Routed,
+##                   the ones that are not on 443 resolve to the relay and find
+##                   nothing listening: the client waits, falls back to the
+##                   address list, and the operator hears "Steam Connection
+##                   Error" for a sign-in that does eventually work. The store,
+##                   the community and everything a person browses stay routed;
+##                   only the sign-in channel goes direct.
+#server=/discord.media/#
+#server=/vivox.com/#
+#server=/steamserver.net/#
 #__END_BYPASS__
 
 #__BEGIN_NO_AAAA__
@@ -2637,12 +2664,14 @@ exit 0
 #    [ $# -gt 0 ] || { echo "usage: smartdns bypass <domain> [domain ...]"; exit 1; }
 #    for d in "$@"; do
 #      d=$(echo "$d" | tr 'A-Z' 'a-z' | sed 's#^https\?://##; s#/.*##; s/^\.//')
-#      if grep -qxF "server=/$d/1.1.1.1" "$BYPASS"; then
+#      # Any rule for the name counts, whichever resolvers it names: the
+#      # shipped list says "#", which is dnsmasq for the upstreams this
+#      # resolver already has, and matching only one spelling of it would
+#      # append a second rule for a name that is bypassed already.
+#      if grep -qE "^server=/$d/" "$BYPASS"; then
 #        echo "already bypassed: $d"
 #      else
-#        printf 'server=/%s/1.1.1.1
-#server=/%s/8.8.8.8
-#' "$d" "$d" >> "$BYPASS"
+#        printf 'server=/%s/#\n' "$d" >> "$BYPASS"
 #        echo "bypassed (resolves to its real IP now): $d"
 #      fi
 #    done
@@ -4960,8 +4989,13 @@ exit 0
 ## The catalogue's games, whose domains the relays ping so that customers can see
 ## how each game's servers answer from Iran. The relay pings, not this machine:
 ## this one is abroad, and its ping says nothing about an Iranian line.
+## The platforms, stores and studios whose own hosts are worth timing. The
+## catalogue's genre sections - shooters, co-op, anime - are buckets of many
+## unrelated titles on unrelated networks, and one number over four of their
+## domains would not be any game's ping, so they are left out on purpose.
 #GAME_SERVICES = ("playstation", "xbox", "nintendo", "steam", "epic", "ea", "blizzard",
-#                 "ubisoft", "riot", "rockstar", "bethesda", "gog", "roblox", "minecraft")
+#                 "ubisoft", "riot", "rockstar", "bethesda", "gog", "roblox", "minecraft",
+#                 "supercell")
 #PING_HOSTS_PER_GAME = 4
 ## Older than this and the bot says so: the relay measures every five minutes,
 ## so a quarter of an hour without news means it has stopped.
@@ -14822,9 +14856,11 @@ exit 0
 #adobelogin.com
 #ads.google.com
 #adservice.google.com
+#ageofempires.com
 #ai.google
 #aistudio.google.com
 #aka.ms
+#albiononline.com
 #algolia.com
 #algolia.net
 #altera.com
@@ -14838,37 +14874,73 @@ exit 0
 #apache.org
 #apexlegends.com
 #apis.google.com
+#app.launchdarkly.com
 #appengine.google.com
 #apple.com
 #apps.admob.com
 #appspot.com
 #arcgis.com
 #archive.ubuntu.com
+#arcraiders.com
+#arcsystemworks.com
 #arduino.cc
+#arena.net
+#arenabreakout.com
+#arenabreakoutinfinite.com
+#arma3.com
+#arrowheadgamestudios.com
 #arxiv.org
 #asana.com
+#assassinscreed.com
+#assets1.xboxlive.com
+#assets2.xboxlive.com
+#assettocorsa.net
 #atlassian.com
 #atlassian.net
+#atvi.com
+#audio-ak-spotify-com.akamaized.net
 #aws.amazon.com
 #b4x.com
+#badguitarstudio.com
 #baeldung.com
+#bandainamco.co.jp
+#bandainamcoent.com
+#bandainamcoent.eu
 #battle.net
 #battlecode.org
 #battlefield.com
+#battlenet.com
+#battlenet.com.cn
+#battlestategames.com
+#battleye.com
 #beans.org
 #bethesda.net
+#bethsoft.com
+#bhsr.com
+#bhvr.com
+#bing.com
 #bintray.com
 #bioware.com
+#bistudio.com
 #bit.dev
 #bitbucket.org
 #bitsrc.io
 #bitvise.com
+#blizzard.cn
 #blizzard.com
+#bloodstrike.com
 #bluemix.net
+#blzstatic.com
+#bnetcmsus-a.akamaihd.net
+#bohemia.net
 #books.google.com
+#boombeach.com
 #bootstrapcdn.com
 #bootswatch.com
 #branch.io
+#brawlhalla.com
+#brawlstars.com
+#brawlstarsgame.com
 #bugsnag.com
 #bun.sh
 #business.google.com
@@ -14876,22 +14948,35 @@ exit 0
 #caddy.com
 #caddyserver.com
 #callofduty.com
+#callofdutywarzone.com
 #canva.com
+#capcom-games.com
+#capcom.co.jp
+#capcom.com
+#cdn.blizzard.com
+#cdn.gog.com
+#cdn.ubi.com
+#cdprojektred.com
 #centos.org
 #chatgpt.com
 #chocolatey.org
 #cisco.com
 #clamav.net
+#clashofclans.com
+#clashroyale.com
 #classroom.google.com
 #claude.ai
 #clients.google.com
 #clients2.google.com
 #clients6.google.com
+#clientstream.launchdarkly.com
 #cljdoc.org
 #cloud.google.com
 #cloudera.com
 #cloudflare.com
 #cloudfront.net
+#cloudimperiumgames.com
+#cncnet.org
 #cocalc.com
 #code.google.com
 #code.visualstudio.com
@@ -14900,9 +14985,13 @@ exit 0
 #codeium.com
 #codesandbox.io
 #codex.cs.yale.edu
+#codwarzone.com
 #coinbase.com
 #colab.research.google.com
+#conanexiles.com
+#copilot.microsoft.com
 #count.ly
+#counter-strike.net
 #coursehero.com
 #coursera-apps.org
 #coursera.com
@@ -14910,13 +14999,22 @@ exit 0
 #cp.maxcdn.com
 #crashlytics.com
 #crates.io
+#crimsondesert.com
 #criteriongames.com
+#crytek.com
 #csb.app
 #curd.io
 #cursor.com
 #cursor.sh
+#cyberpunk.net
+#cygames.co.jp
+#d1.xboxlive.com
+#d2.xboxlive.com
 #dartlang.org
 #datacamp.com
+#datadoghq.com
+#dayz.com
+#deadbydaylight.com
 #deepmind.google
 #deepseek.com
 #dell.com
@@ -14927,54 +15025,97 @@ exit 0
 #developer.google.com
 #developer.samsung.com
 #developers.google.com
+#diablo.com
+#diablo4.com
 #dice.se
 #digikey.com
+#digitalextremes.com
 #digitalocean.com
+#dis.gd
+#discord-activities.com
+#discord.co
 #discord.com
 #discord.gg
+#discord.gift
+#discord.new
 #discordapp.com
 #discordapp.net
+#discordcdn.com
+#discordstatus.com
+#dist.blizzard.com
 #dl-ssl.google.com
+#dl.delivery.mp.microsoft.com
 #dl.google.com
+#dlassets-ssl.xboxlive.com
+#dlassets.xboxlive.com
 #dns.google.com
 #docker.com
 #docker.io
 #docs.datastax.com
 #domains.google.com
+#dota2.com
 #dotnet.microsoft.com
 #doubleclick.net
 #doubleclickbygoogle.com
 #download.01.org
+#download.epicgames.com
 #download.virtualbox.org
+#download2.epicgames.com
+#download3.epicgames.com
+#download4.epicgames.com
+#dunegames.com
+#dyn.riotcdn.net
 #ea.com
+#ea.com.cn
 #eaaccess.com
 #eaassets-a.akamaihd.net
+#eac-cdn.com
 #eacdn.com
+#eafc.com
 #eamobile.com
 #eaplay.com
+#easebar.com
 #easports.com
+#easyanticheat.net
+#edge.blizzard.com
 #edgesuite.net
 #edx.org
 #elastic.co
+#elderscrollsonline.com
+#electronicarts.com
 #element14.com
+#embark.games
 #en25.com
+#endfield.hypergryph.com
+#enlisted.net
 #enterprisedb.com
 #envato-static.com
 #envato.com
+#epicgames-download1.akamaized.net
 #epicgames.com
+#epicgames.dev
+#epicgames.net
+#epicgames.statuspage.io
 #es.io
+#escapefromtarkov.com
 #eslint.org
 #espressif.com
 #events.google.com
+#events.launchdarkly.com
 #explainshell.com
 #expo.io
 #expressjs.com
 #fabric.io
 #faceit.com
+#facepunch.com
+#fallguys.com
+#fastly-download.epicgames.com
+#fatsharkgames.com
 #fbsbx.com
 #fcmobile.com
 #fiber.google.com
 #figma.com
+#finalfantasyxiv.com
 #firebase.com
 #firebase.google.com
 #flurry.com
@@ -14983,20 +15124,32 @@ exit 0
 #fluttercrashcourse.com
 #flutterlearn.com
 #fly.io
+#focus-entmt.com
 #fodev.org
+#fortnite.com
 #forums.cpanel.net
+#forzamotorsport.net
+#fragpunk.com
 #freecodecamp.org
+#fromsoftware.jp
 #frostbite.com
 #fsdn.com
+#funcom.com
+#gaijin.net
 #gallery.io
 #gallerycdn.vsassets.io
+#gameloop.com
 #gamepass.com
+#gameranger.com
 #garena.com
 #gcr.io
 #geforce.com
+#geforcenow.com
 #gemini.google.com
 #getbootstrap.com
 #getcaddy.com
+#gfn.am
+#ggpht.com
 #ghcr.io
 #github.com
 #githubapp.com
@@ -15029,23 +15182,46 @@ exit 0
 #graphicriver.net
 #graphql.org
 #gravatar.com
+#grayzonewarfare.com
+#grindinggear.com
+#grok.com
 #groq.com
+#gryphline.com
+#gst.prod.dl.playstation.net
 #gstatic.com
+#gtaonline.com
+#guildwars2.com
+#guiltygear.com
+#gvt1.com
+#gvt2.com
 #hackerrank.com
+#halowaypoint.com
 #hashicorp.com
+#haydaygame.com
+#hearthstone.com
+#helldivers2.com
+#hellletloose.com
 #helm.sh
 #heroku.com
 #hetzner.com
 #hf.co
+#hirezstudios.com
+#honkaiimpact3.com
+#honkaistarrail.com
+#hoyolab.com
 #hoyoverse.com
 #huggingface.co
 #humblebundle.com
+#huntshowdown.com
 #hyper.is
+#hypergryph.com
 #i.stack.imgur.com
 #i18next.com
 #ibm.com
 #ieee.org
 #incredibuild.com
+#infinityward.com
+#innersloth.com
 #intel.com
 #invis.io
 #issuetracker.google.com
@@ -15062,6 +15238,8 @@ exit 0
 #jhipster.tech
 #jitpack.io
 #jitsi.org
+#joinsquad.com
+#jtvnw.net
 #jungle.net
 #justpaste.it
 #jwplayer.com
@@ -15070,8 +15248,14 @@ exit 0
 #kaggle.net
 #kaggleusercontent.com
 #khanacademy.org
+#kick.com
+#kineticgames.co.uk
+#konami.com
+#konami.net
 #krafton.com
 #kubernetes.io
+#kurogame.com
+#kurogames.com
 #labix.org
 #labs.google
 #laravel.com
@@ -15079,15 +15263,21 @@ exit 0
 #leagueoflegends.com
 #learn.microsoft.com
 #lenovo.com
+#level3.blizzard.com
 #libraries.io
 #lightstep.com
 #linear.app
 #linode.com
 #livefyre.com
+#llnw.blizzard.com
+#lolesports.com
+#lostlight.game
 #maas.io
+#madfingergames.com
 #mailgun.com
 #marketingplantform.google.com
 #marketplace.visualstudio.com
+#marvelrivals.com
 #material.io
 #mathworks.com
 #maven.google.com
@@ -15097,6 +15287,7 @@ exit 0
 #medium.com
 #metasploit.com
 #microchip.com
+#midjourney.com
 #mihoyo.com
 #minecraft.net
 #minecraftservices.com
@@ -15106,7 +15297,10 @@ exit 0
 #mojang.com
 #mongodb.com
 #mongodb.org
+#monsterhunter.com
+#mortalkombat.com
 #mp.microsoft.com
+#multiversus.com
 #mybridge.co
 #myfonts.net
 #mysql.com
@@ -15116,6 +15310,8 @@ exit 0
 #netlify.app
 #netlify.com
 #newrelic.com
+#newworld.com
+#newworldinteractive.com
 #nextjs.org
 #nflxext.com
 #nflximg.net
@@ -15132,133 +15328,240 @@ exit 0
 #npmjs.org
 #nuget.org
 #nvidia.com
+#nvidiagrid.net
 #oaistatic.com
 #oaiusercontent.com
+#offworldindustries.com
 #ollama.com
+#oncehuman.game
+#onstove.com
 #openai.com
 #openrouter.ai
 #optimize.google.com
 #optimizely.com
 #oracle.com
+#origin-a.akamaihd.net
 #origin.com
 #overleaf.com
+#overwatch2.com
 #packagesource.com
 #packagist.org
 #packtpub.com
+#paladins.com
+#palworldgame.com
 #parsely.com
+#patches.rockstargames.com
+#pathofexile.com
+#pathofexile2.com
+#paydaythegame.com
 #payments.google.com
 #paypal.com
 #paypalobjects.com
+#pearlabyss.com
+#perfectworld.com
 #perplexity.ai
 #photodune.net
 #php.net
 #piles.overleaf.com
 #pkg.go.dev
 #play.google.com
+#play2xko.com
+#playartifact.com
+#playblackdesert.com
+#playdarktide.com
+#playdeltaforce.com
+#playfabapi.com
+#playlostark.com
+#playoverwatch.com
+#playruneterra.com
 #playstation.com
+#playstation.com.cn
 #playstation.net
+#playstationnetwork.com
+#playthroneandliberty.com
+#playvalorant.com
 #pnpm.io
+#pocketpair.jp
+#poe.com
 #polymer-project.org
 #popcap.com
 #postman.com
 #proandroiddev.com
+#ps5cel.np.dl.playstation.net
 #pscdn.co
+#psn.dl.playstation.net
+#psyonix.com
 #pubg.com
+#pwrd.com
 #pypi.org
 #python.org
 #qt.io
 #qualcomm.com
 #quay.io
+#radeon.com
 #railway.app
+#rainbow6.com
 #rapid7.com
 #raspberrypi.com
+#ravensoftware.com
+#rbx.com
 #rbxcdn.com
+#re-logic.com
 #reactjs.org
 #realm.io
+#recroom.com
+#reddeadonline.com
 #registry.k8s.io
 #releases.hashicorp.com
 #render.com
 #replit.com
 #researchgate.net
 #respawn.com
+#rgpub.io
+#riotcdn.net
+#riotgames.co.kr
 #riotgames.com
+#riotgames.com.tr
+#riotgames.jp
+#riotgames.zendesk.com
+#robertsspaceindustries.com
+#roblox.cn
 #roblox.com
+#robloxlabs.com
+#rocketleague.com
 #rockstargames.com
+#rockstargames.statuspage.io
+#rockstarnorth.com
+#roguecompany.com
+#rsg.sc
 #ruby-doc.org
 #rubygems.org
 #rust-lang.org
+#rustafied.com
 #salesforce.com
 #scdn.co
 #schema.org
 #sciencedirect.com
+#scopely.com
+#scssoft.com
+#seaofthieves.com
 #seleniumhq.org
 #sendgrid.com
 #sentry.io
 #serialport.io
 #serverfault.com
+#setup.rbxcdn.com
+#sie.com
+#sims.com
 #slack-edge.com
 #slack.com
+#sledgehammergames.com
+#smilegate.com
+#sndcdn.com
 #socket.io
 #softlayer.com
 #softonic.com
 #sonarsource.com
 #sonatype.org
 #sonyentertainmentnetwork.com
+#soulframe.com
+#soundcloud.com
 #sparkjava.com
 #spiceworks.com
 #splunk.com
+#spoti.fi
 #spotify.com
+#spotifycdn.com
 #spring.io
 #springer.com
+#squadbusters.game
+#squadbustersgame.com
+#square-enix.com
 #sstatic.net
 #st.com
 #stackexchange.com
 #stackoverflow.com
+#starbreeze.com
+#steam-chat.com
+#steamcommunity-a.akamaihd.net
 #steamcommunity.com
 #steamcontent.com
+#steamdeck.com
+#steamgames.com
 #steampowered.com
+#steamstat.us
 #steamstatic.com
+#steamusercontent-a.akamaihd.net
 #storage.googleapis.com
+#straightbackgames.com
+#streetfighter.com
+#strinova.com
 #stripe.com
+#studiowildcard.com
+#stumbleguys.com
 #sun.com
 #supabase.com
 #supercell.com
+#supercell.net
+#supercellid.com
 #superuser.com
 #surveys.google.com
+#survivetheark.com
 #swaggerhub.com
 #swift.org
 #swtor.com
 #symfony.com
 #tagmanager.google.com
 #take2games.com
+#team17.com
 #teamtreehouse.com
 #teamviewer.com
 #telerik.com
+#tencentgames.com
 #tensorflow.org
 #terraform.io
+#terraria.org
+#thedivisiongame.com
+#thefinals.com
 #themeforest.net
 #thesims.com
+#thewitcher.com
 #ti.com
+#tiberiumalliances.com
 #tinyjpg.com
 #tinypng.com
 #together.ai
 #toggl.com
+#toweroffantasy-global.com
+#trackmania.com
 #traviscistatus.com
 #trello.com
+#treyarch.com
+#truckersmp.com
 #ttvnw.net
 #twitch.tv
+#twitchcdn.net
 #ubi.com
+#ubisoft.ca
 #ubisoft.com
+#ubisoftconnect.com
 #udemy.com
 #udemycdn-a.com
 #udemycdn.com
+#uef.np.dl.playstation.net
+#uflgame.com
+#umamusume.jp
+#underlords.com
 #unity.com
 #unity3d.com
 #unrealengine.com
+#unrealengine.dev
 #unsplash.com
+#uplay.com
 #upwork.com
 #vagrantup.com
 #valorant.com
+#valorantesports.com
 #valvesoftware.com
 #vercel.app
 #vercel.com
@@ -15267,25 +15570,50 @@ exit 0
 #visualstudio.microsoft.com
 #vmcdn.com
 #vmware.com
+#voidinteractive.net
+#vrchat.com
+#vrchat.net
 #vscode-cdn.net
 #vscode.dev
 #vuejs.org
 #vuetifyjs.com
 #vuforia.com
+#warframe.com
+#wargaming.net
+#warthunder.com
+#wbgames.com
 #web.dev
 #wikia.com
 #windsurf.com
 #withgoogle.com
 #wolframalpha.com
+#worldoftanks.com
+#worldoftanks.eu
+#worldoftrucks.com
+#worldofwarcraft.com
+#worldofwarships.com
 #wpastra.com
+#wutheringwaves.kurogames.com
 #x.ai
 #xbox.com
+#xboxab.com
+#xboxgamestudios.com
 #xboxlive.com
+#xboxservices.com
+#xdefiant.com
 #xilinx.com
+#xvcf1.xboxlive.com
+#xvcf2.xboxlive.com
+#xvcf3.xboxlive.com
 #yarnpkg.com
 #yarnpkg.org
+#you.com
+#yuanshen.com
 #zeit.co
+#zenimax.com
+#zenlesszonezero.com
 #zeplin.io
+#zeus.dl.playstation.net
 #zoom.us
 #__END_DOMAINS__
 
@@ -15301,8 +15629,11 @@ exit 0
 #          "label": "فروشگاه، اکانت و بازی آنلاین",
 #          "domains": [
 #            "playstation.com",
+#            "playstation.com.cn",
 #            "playstation.net",
+#            "playstationnetwork.com",
 #            "pscdn.co",
+#            "sie.com",
 #            "sonyentertainmentnetwork.com"
 #          ]
 #        },
@@ -15312,11 +15643,14 @@ exit 0
 #          "domains": [
 #            "gst.prod.dl.playstation.net",
 #            "ps5cel.np.dl.playstation.net",
+#            "psn.dl.playstation.net",
 #            "uef.np.dl.playstation.net",
 #            "zeus.dl.playstation.net"
-#          ]
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "xbox",
@@ -15327,10 +15661,16 @@ exit 0
 #          "label": "فروشگاه، اکانت و بازی آنلاین",
 #          "domains": [
 #            "edgesuite.net",
+#            "forzamotorsport.net",
 #            "gamepass.com",
+#            "halowaypoint.com",
 #            "mp.microsoft.com",
+#            "seaofthieves.com",
 #            "xbox.com",
-#            "xboxlive.com"
+#            "xboxab.com",
+#            "xboxgamestudios.com",
+#            "xboxlive.com",
+#            "xboxservices.com"
 #          ]
 #        },
 #        {
@@ -15338,13 +15678,20 @@ exit 0
 #          "label": "دانلود بازی",
 #          "domains": [
 #            "assets1.xboxlive.com",
+#            "assets2.xboxlive.com",
+#            "d1.xboxlive.com",
+#            "d2.xboxlive.com",
 #            "dl.delivery.mp.microsoft.com",
+#            "dlassets-ssl.xboxlive.com",
 #            "dlassets.xboxlive.com",
 #            "xvcf1.xboxlive.com",
-#            "xvcf2.xboxlive.com"
-#          ]
+#            "xvcf2.xboxlive.com",
+#            "xvcf3.xboxlive.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "nintendo",
@@ -15358,7 +15705,8 @@ exit 0
 #            "nintendo.net"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "steam",
@@ -15368,9 +15716,18 @@ exit 0
 #          "key": "main",
 #          "label": "فروشگاه و انجمن",
 #          "domains": [
+#            "counter-strike.net",
+#            "dota2.com",
+#            "playartifact.com",
+#            "steam-chat.com",
+#            "steamcommunity-a.akamaihd.net",
 #            "steamcommunity.com",
+#            "steamdeck.com",
+#            "steamgames.com",
 #            "steampowered.com",
+#            "steamstat.us",
 #            "steamstatic.com",
+#            "underlords.com",
 #            "valvesoftware.com"
 #          ]
 #        },
@@ -15378,10 +15735,13 @@ exit 0
 #          "key": "download",
 #          "label": "دانلود بازی",
 #          "domains": [
-#            "steamcontent.com"
-#          ]
+#            "steamcontent.com",
+#            "steamusercontent-a.akamaihd.net"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "epic",
@@ -15391,11 +15751,33 @@ exit 0
 #          "key": "main",
 #          "label": "فروشگاه، لانچر و اکانت",
 #          "domains": [
+#            "epicgames-download1.akamaized.net",
 #            "epicgames.com",
-#            "unrealengine.com"
+#            "epicgames.dev",
+#            "epicgames.net",
+#            "epicgames.statuspage.io",
+#            "fallguys.com",
+#            "fortnite.com",
+#            "psyonix.com",
+#            "rocketleague.com",
+#            "unrealengine.com",
+#            "unrealengine.dev"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "download.epicgames.com",
+#            "download2.epicgames.com",
+#            "download3.epicgames.com",
+#            "download4.epicgames.com",
+#            "fastly-download.epicgames.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "ea",
@@ -15411,12 +15793,15 @@ exit 0
 #            "criteriongames.com",
 #            "dice.se",
 #            "ea.com",
+#            "ea.com.cn",
 #            "eaaccess.com",
 #            "eaassets-a.akamaihd.net",
 #            "eacdn.com",
+#            "eafc.com",
 #            "eamobile.com",
 #            "eaplay.com",
 #            "easports.com",
+#            "electronicarts.com",
 #            "fcmobile.com",
 #            "frostbite.com",
 #            "maxis.com",
@@ -15424,11 +15809,22 @@ exit 0
 #            "origin.com",
 #            "popcap.com",
 #            "respawn.com",
+#            "sims.com",
 #            "swtor.com",
-#            "thesims.com"
+#            "thesims.com",
+#            "tiberiumalliances.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "origin-a.akamaihd.net"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "blizzard",
@@ -15439,12 +15835,43 @@ exit 0
 #          "label": "همه",
 #          "domains": [
 #            "activision.com",
+#            "atvi.com",
 #            "battle.net",
+#            "battlenet.com",
+#            "battlenet.com.cn",
+#            "blizzard.cn",
 #            "blizzard.com",
-#            "callofduty.com"
+#            "blzstatic.com",
+#            "bnetcmsus-a.akamaihd.net",
+#            "callofduty.com",
+#            "callofdutywarzone.com",
+#            "codwarzone.com",
+#            "diablo.com",
+#            "diablo4.com",
+#            "hearthstone.com",
+#            "infinityward.com",
+#            "overwatch2.com",
+#            "playoverwatch.com",
+#            "ravensoftware.com",
+#            "sledgehammergames.com",
+#            "treyarch.com",
+#            "worldofwarcraft.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "cdn.blizzard.com",
+#            "dist.blizzard.com",
+#            "edge.blizzard.com",
+#            "level3.blizzard.com",
+#            "llnw.blizzard.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "ubisoft",
@@ -15454,11 +15881,28 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "assassinscreed.com",
+#            "rainbow6.com",
+#            "thedivisiongame.com",
+#            "trackmania.com",
 #            "ubi.com",
-#            "ubisoft.com"
+#            "ubisoft.ca",
+#            "ubisoft.com",
+#            "ubisoftconnect.com",
+#            "uplay.com",
+#            "xdefiant.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "cdn.ubi.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "riot",
@@ -15468,12 +15912,35 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "app.launchdarkly.com",
+#            "clientstream.launchdarkly.com",
+#            "events.launchdarkly.com",
 #            "leagueoflegends.com",
+#            "lolesports.com",
+#            "play2xko.com",
+#            "playruneterra.com",
+#            "playvalorant.com",
+#            "rgpub.io",
+#            "riotcdn.net",
+#            "riotgames.co.kr",
 #            "riotgames.com",
-#            "valorant.com"
+#            "riotgames.com.tr",
+#            "riotgames.jp",
+#            "riotgames.zendesk.com",
+#            "valorant.com",
+#            "valorantesports.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "dyn.riotcdn.net"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "rockstar",
@@ -15483,11 +15950,25 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "gtaonline.com",
+#            "reddeadonline.com",
 #            "rockstargames.com",
+#            "rockstargames.statuspage.io",
+#            "rockstarnorth.com",
+#            "rsg.sc",
 #            "take2games.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "patches.rockstargames.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "bethesda",
@@ -15497,10 +15978,12 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
-#            "bethesda.net"
+#            "bethesda.net",
+#            "bethsoft.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "gog",
@@ -15514,8 +15997,17 @@ exit 0
 #            "humblebundle.com",
 #            "itch.io"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "cdn.gog.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "roblox",
@@ -15525,11 +16017,23 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "rbx.com",
 #            "rbxcdn.com",
-#            "roblox.com"
+#            "roblox.cn",
+#            "roblox.com",
+#            "robloxlabs.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود بازی",
+#          "domains": [
+#            "setup.rbxcdn.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "minecraft",
@@ -15544,31 +16048,727 @@ exit 0
 #            "mojang.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
-#      "key": "othergames",
-#      "label": "بازی‌های دیگر",
+#      "key": "pubgmobile",
+#      "label": "PUBG Mobile",
+#      "groups": [
+#        {
+#          "key": "main",
+#          "label": "همه",
+#          "opt_in": true,
+#          "note": "مستقیم کار می‌کند؛ فقط برای مشتری‌های اپراتوری روشن کنید که بازی رویش باز نمی‌شود — آپدیت‌های بازی هم از سرورها رد می‌شود",
+#          "domains": [
+#            "cloudpvp.com",
+#            "gcloudcs.com",
+#            "igamebuy.com",
+#            "igamecj.com",
+#            "intlgame.com",
+#            "pubgmobile.com"
+#          ]
+#        }
+#      ],
+#      "section": "bypass"
+#    },
+#    {
+#      "key": "supercell",
+#      "label": "Supercell",
 #      "groups": [
 #        {
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
-#            "battlecode.org",
-#            "faceit.com",
-#            "garena.com",
-#            "hoyoverse.com",
-#            "incredibuild.com",
-#            "krafton.com",
-#            "mihoyo.com",
-#            "pubg.com",
+#            "boombeach.com",
+#            "brawlstars.com",
+#            "brawlstarsgame.com",
+#            "clashofclans.com",
+#            "clashroyale.com",
+#            "haydaygame.com",
+#            "squadbusters.game",
+#            "squadbustersgame.com",
 #            "supercell.com",
+#            "supercell.net",
+#            "supercellid.com"
+#          ]
+#        }
+#      ],
+#      "section": "games"
+#    },
+#    {
+#      "key": "shooters",
+#      "label": "Shooters & battle royale",
+#      "groups": [
+#        {
+#          "key": "arcraiders",
+#          "label": "ARC Raiders",
+#          "domains": [
+#            "arcraiders.com"
+#          ]
+#        },
+#        {
+#          "key": "arenabreakout",
+#          "label": "Arena Breakout",
+#          "domains": [
+#            "arenabreakout.com",
+#            "arenabreakoutinfinite.com"
+#          ]
+#        },
+#        {
+#          "key": "bohemia",
+#          "label": "Bohemia — Arma & DayZ",
+#          "domains": [
+#            "arma3.com",
+#            "bistudio.com",
+#            "bohemia.net",
+#            "dayz.com"
+#          ]
+#        },
+#        {
+#          "key": "helldivers",
+#          "label": "Helldivers 2",
+#          "domains": [
+#            "arrowheadgamestudios.com",
+#            "helldivers2.com"
+#          ]
+#        },
+#        {
+#          "key": "deadbydaylight",
+#          "label": "Dead by Daylight",
+#          "domains": [
+#            "bhvr.com",
+#            "deadbydaylight.com"
+#          ]
+#        },
+#        {
+#          "key": "bloodstrike",
+#          "label": "Blood Strike",
+#          "domains": [
+#            "bloodstrike.com"
+#          ]
+#        },
+#        {
+#          "key": "huntshowdown",
+#          "label": "Crytek — Hunt: Showdown",
+#          "domains": [
+#            "crytek.com",
+#            "huntshowdown.com"
+#          ]
+#        },
+#        {
+#          "key": "rust",
+#          "label": "Rust",
+#          "domains": [
+#            "facepunch.com",
+#            "rustafied.com"
+#          ]
+#        },
+#        {
+#          "key": "fragpunk",
+#          "label": "FragPunk",
+#          "domains": [
+#            "fragpunk.com"
+#          ]
+#        },
+#        {
+#          "key": "grayzone",
+#          "label": "Gray Zone Warfare",
+#          "domains": [
+#            "grayzonewarfare.com"
+#          ]
+#        },
+#        {
+#          "key": "hellletloose",
+#          "label": "Hell Let Loose",
+#          "domains": [
+#            "hellletloose.com"
+#          ]
+#        },
+#        {
+#          "key": "team17",
+#          "label": "Team17 — Worms & Dredge",
+#          "domains": [
+#            "team17.com"
+#          ]
+#        },
+#        {
+#          "key": "hirez",
+#          "label": "Hi-Rez — Paladins & SMITE",
+#          "domains": [
+#            "hirezstudios.com",
+#            "paladins.com",
+#            "roguecompany.com"
+#          ]
+#        },
+#        {
+#          "key": "squad",
+#          "label": "Squad",
+#          "domains": [
+#            "joinsquad.com",
+#            "offworldindustries.com"
+#          ]
+#        },
+#        {
+#          "key": "lostlight",
+#          "label": "Lost Light",
+#          "domains": [
+#            "lostlight.game"
+#          ]
+#        },
+#        {
+#          "key": "madfinger",
+#          "label": "Madfinger — Shadowgun",
+#          "domains": [
+#            "madfingergames.com"
+#          ]
+#        },
+#        {
+#          "key": "marvelrivals",
+#          "label": "Marvel Rivals",
+#          "domains": [
+#            "marvelrivals.com"
+#          ]
+#        },
+#        {
+#          "key": "insurgency",
+#          "label": "Insurgency",
+#          "domains": [
+#            "newworldinteractive.com"
+#          ]
+#        },
+#        {
+#          "key": "deltaforce",
+#          "label": "Delta Force",
+#          "domains": [
+#            "playdeltaforce.com"
+#          ]
+#        },
+#        {
+#          "key": "thefinals",
+#          "label": "THE FINALS",
+#          "domains": [
+#            "embark.games",
+#            "thefinals.com"
+#          ]
+#        },
+#        {
+#          "key": "tarkov",
+#          "label": "Escape from Tarkov",
+#          "domains": [
+#            "battlestategames.com",
+#            "escapefromtarkov.com"
+#          ]
+#        },
+#        {
+#          "key": "readyornot",
+#          "label": "Ready or Not",
+#          "domains": [
+#            "voidinteractive.net"
+#          ]
+#        }
+#      ],
+#      "section": "games"
+#    },
+#    {
+#      "key": "anime",
+#      "label": "Anime, gacha & MMO",
+#      "groups": [
+#        {
+#          "key": "albion",
+#          "label": "Albion Online",
+#          "domains": [
+#            "albiononline.com"
+#          ]
+#        },
+#        {
+#          "key": "bandainamco",
+#          "label": "Bandai Namco — Elden Ring, Tekken",
+#          "domains": [
+#            "bandainamco.co.jp",
+#            "bandainamcoent.com",
+#            "bandainamcoent.eu"
+#          ]
+#        },
+#        {
+#          "key": "hoyoverse",
+#          "label": "HoYoverse — Genshin, Honkai, ZZZ",
+#          "domains": [
+#            "bhsr.com",
+#            "honkaiimpact3.com",
+#            "honkaistarrail.com",
+#            "hoyolab.com",
+#            "hoyoverse.com",
+#            "mihoyo.com",
+#            "yuanshen.com",
+#            "zenlesszonezero.com"
+#          ]
+#        },
+#        {
+#          "key": "pearlabyss",
+#          "label": "Pearl Abyss — Black Desert",
+#          "domains": [
+#            "crimsondesert.com",
+#            "pearlabyss.com",
+#            "playblackdesert.com"
+#          ]
+#        },
+#        {
+#          "key": "cygames",
+#          "label": "Cygames — Uma Musume",
+#          "domains": [
+#            "cygames.co.jp",
+#            "umamusume.jp"
+#          ]
+#        },
+#        {
+#          "key": "warframe",
+#          "label": "Warframe & Soulframe",
+#          "domains": [
+#            "digitalextremes.com",
+#            "soulframe.com",
+#            "warframe.com"
+#          ]
+#        },
+#        {
+#          "key": "hypergryph",
+#          "label": "Hypergryph — Arknights",
+#          "domains": [
+#            "endfield.hypergryph.com",
+#            "gryphline.com",
+#            "hypergryph.com"
+#          ]
+#        },
+#        {
+#          "key": "fromsoftware",
+#          "label": "FromSoftware",
+#          "domains": [
+#            "fromsoftware.jp"
+#          ]
+#        },
+#        {
+#          "key": "pathofexile",
+#          "label": "Path of Exile 1 & 2",
+#          "domains": [
+#            "grindinggear.com",
+#            "pathofexile.com",
+#            "pathofexile2.com"
+#          ]
+#        },
+#        {
+#          "key": "kurogames",
+#          "label": "Kuro Games — Wuthering Waves",
+#          "domains": [
+#            "kurogame.com",
+#            "kurogames.com",
+#            "wutheringwaves.kurogames.com"
+#          ]
+#        },
+#        {
+#          "key": "newworld",
+#          "label": "New World",
+#          "domains": [
+#            "newworld.com"
+#          ]
+#        },
+#        {
+#          "key": "oncehuman",
+#          "label": "Once Human",
+#          "domains": [
+#            "oncehuman.game"
+#          ]
+#        },
+#        {
+#          "key": "smilegate",
+#          "label": "Smilegate — Lost Ark & STOVE",
+#          "domains": [
+#            "onstove.com",
+#            "playlostark.com",
+#            "smilegate.com"
+#          ]
+#        },
+#        {
+#          "key": "perfectworld",
+#          "label": "Perfect World",
+#          "domains": [
+#            "perfectworld.com",
+#            "pwrd.com"
+#          ]
+#        },
+#        {
+#          "key": "throneliberty",
+#          "label": "Throne and Liberty",
+#          "domains": [
+#            "playthroneandliberty.com"
+#          ]
+#        },
+#        {
+#          "key": "strinova",
+#          "label": "Strinova",
+#          "domains": [
+#            "strinova.com"
+#          ]
+#        },
+#        {
+#          "key": "toweroffantasy",
+#          "label": "Tower of Fantasy",
+#          "domains": [
+#            "toweroffantasy-global.com"
+#          ]
+#        },
+#        {
+#          "key": "guildwars2",
+#          "label": "Guild Wars 2",
+#          "domains": [
+#            "arena.net",
+#            "guildwars2.com"
+#          ]
+#        },
+#        {
+#          "key": "ffxiv",
+#          "label": "Final Fantasy XIV",
+#          "domains": [
+#            "finalfantasyxiv.com",
+#            "square-enix.com"
+#          ]
+#        }
+#      ],
+#      "section": "games"
+#    },
+#    {
+#      "key": "coop",
+#      "label": "Co-op, survival & strategy",
+#      "groups": [
+#        {
+#          "key": "ageofempires",
+#          "label": "Age of Empires",
+#          "domains": [
+#            "ageofempires.com"
+#          ]
+#        },
+#        {
+#          "key": "starcitizen",
+#          "label": "Star Citizen",
+#          "domains": [
+#            "cloudimperiumgames.com",
+#            "robertsspaceindustries.com"
+#          ]
+#        },
+#        {
+#          "key": "cnc",
+#          "label": "Command & Conquer",
+#          "domains": [
+#            "cncnet.org"
+#          ]
+#        },
+#        {
+#          "key": "funcom",
+#          "label": "Funcom — Conan & Dune",
+#          "domains": [
+#            "conanexiles.com",
+#            "dunegames.com",
+#            "funcom.com"
+#          ]
+#        },
+#        {
+#          "key": "zenimax",
+#          "label": "ZeniMax — Elder Scrolls Online",
+#          "domains": [
+#            "elderscrollsonline.com",
+#            "zenimax.com"
+#          ]
+#        },
+#        {
+#          "key": "gaijin",
+#          "label": "Gaijin — War Thunder & Enlisted",
+#          "domains": [
+#            "enlisted.net",
+#            "gaijin.net",
+#            "warthunder.com"
+#          ]
+#        },
+#        {
+#          "key": "fatshark",
+#          "label": "Fatshark — Darktide",
+#          "domains": [
+#            "fatsharkgames.com",
+#            "playdarktide.com"
+#          ]
+#        },
+#        {
+#          "key": "focus",
+#          "label": "Focus — A Plague Tale & Space Marine",
+#          "domains": [
+#            "focus-entmt.com"
+#          ]
+#        },
+#        {
+#          "key": "amongus",
+#          "label": "Among Us",
+#          "domains": [
+#            "innersloth.com"
+#          ]
+#        },
+#        {
+#          "key": "phasmophobia",
+#          "label": "Phasmophobia",
+#          "domains": [
+#            "kineticgames.co.uk"
+#          ]
+#        },
+#        {
+#          "key": "palworld",
+#          "label": "Palworld",
+#          "domains": [
+#            "palworldgame.com",
+#            "pocketpair.jp"
+#          ]
+#        },
+#        {
+#          "key": "payday",
+#          "label": "PAYDAY",
+#          "domains": [
+#            "paydaythegame.com",
+#            "starbreeze.com"
+#          ]
+#        },
+#        {
+#          "key": "terraria",
+#          "label": "Terraria",
+#          "domains": [
+#            "re-logic.com",
+#            "terraria.org"
+#          ]
+#        },
+#        {
+#          "key": "recroom",
+#          "label": "Rec Room",
+#          "domains": [
+#            "recroom.com"
+#          ]
+#        },
+#        {
+#          "key": "scopely",
+#          "label": "Scopely — Monopoly GO",
+#          "domains": [
+#            "scopely.com"
+#          ]
+#        },
+#        {
+#          "key": "straightback",
+#          "label": "Straightback Games",
+#          "domains": [
+#            "straightbackgames.com"
+#          ]
+#        },
+#        {
+#          "key": "ark",
+#          "label": "ARK: Survival",
+#          "domains": [
+#            "studiowildcard.com",
+#            "survivetheark.com"
+#          ]
+#        },
+#        {
+#          "key": "stumbleguys",
+#          "label": "Stumble Guys",
+#          "domains": [
+#            "stumbleguys.com"
+#          ]
+#        },
+#        {
+#          "key": "vrchat",
+#          "label": "VRChat",
+#          "domains": [
+#            "vrchat.com",
+#            "vrchat.net"
+#          ]
+#        },
+#        {
+#          "key": "wargaming",
+#          "label": "Wargaming — World of Tanks",
+#          "domains": [
+#            "wargaming.net",
+#            "worldoftanks.com",
+#            "worldoftanks.eu",
+#            "worldofwarships.com"
+#          ]
+#        }
+#      ],
+#      "section": "games"
+#    },
+#    {
+#      "key": "sports",
+#      "label": "Sports, fighting & racing",
+#      "groups": [
+#        {
+#          "key": "arcsystem",
+#          "label": "Arc System Works — Guilty Gear",
+#          "domains": [
+#            "arcsystemworks.com",
+#            "guiltygear.com"
+#          ]
+#        },
+#        {
+#          "key": "assettocorsa",
+#          "label": "Assetto Corsa",
+#          "domains": [
+#            "assettocorsa.net"
+#          ]
+#        },
+#        {
+#          "key": "brawlhalla",
+#          "label": "Brawlhalla",
+#          "domains": [
+#            "brawlhalla.com"
+#          ]
+#        },
+#        {
+#          "key": "capcom",
+#          "label": "Capcom — Street Fighter & Monster Hunter",
+#          "domains": [
+#            "capcom-games.com",
+#            "capcom.co.jp",
+#            "capcom.com",
+#            "monsterhunter.com",
+#            "streetfighter.com"
+#          ]
+#        },
+#        {
+#          "key": "konami",
+#          "label": "Konami — eFootball",
+#          "domains": [
+#            "konami.com",
+#            "konami.net"
+#          ]
+#        },
+#        {
+#          "key": "wbgames",
+#          "label": "Warner — Mortal Kombat & MultiVersus",
+#          "domains": [
+#            "mortalkombat.com",
+#            "multiversus.com",
+#            "wbgames.com"
+#          ]
+#        },
+#        {
+#          "key": "eurotruck",
+#          "label": "SCS — Euro Truck & ATS",
+#          "domains": [
+#            "scssoft.com",
+#            "truckersmp.com",
+#            "worldoftrucks.com"
+#          ]
+#        },
+#        {
+#          "key": "ufl",
+#          "label": "UFL",
+#          "domains": [
+#            "uflgame.com"
+#          ]
+#        }
+#      ],
+#      "section": "games"
+#    },
+#    {
+#      "key": "gamebackend",
+#      "label": "Riot chat — PVP.net",
+#      "groups": [
+#        {
+#          "key": "main",
+#          "label": "همه",
+#          "opt_in": true,
+#          "note": "روشن کردنش چت و دوستان لیگ و والورانت را قطع می‌کند — این‌ها روی ۵۲۲۲ و ۵۲۲۳ و ۲۰۹۹ هستند و رله فقط ۸۰ و ۴۴۳ را می‌برد. اگر روزی این پورت‌ها روی رله باز شوند، این گروه می‌تواند روشن شود",
+#          "domains": [
+#            "pvp.net",
+#            "wr.pvp.net"
+#          ]
+#        }
+#      ],
+#      "section": "bypass"
+#    },
+#    {
+#      "key": "anticheat",
+#      "label": "Anti-cheat & shared backends",
+#      "section": "games",
+#      "groups": [
+#        {
+#          "key": "main",
+#          "label": "همه",
+#          "domains": [
+#            "battleye.com",
+#            "eac-cdn.com",
+#            "easebar.com",
+#            "easyanticheat.net",
+#            "playfabapi.com"
+#          ]
+#        }
+#      ]
+#    },
+#    {
+#      "key": "othergames",
+#      "label": "Other games",
+#      "groups": [
+#        {
+#          "key": "cdprojekt",
+#          "label": "CD Projekt — Witcher & Cyberpunk",
+#          "domains": [
+#            "cdprojektred.com",
+#            "cyberpunk.net",
+#            "thewitcher.com"
+#          ]
+#        },
+#        {
+#          "key": "faceit",
+#          "label": "FACEIT",
+#          "domains": [
+#            "faceit.com"
+#          ]
+#        },
+#        {
+#          "key": "garena",
+#          "label": "Garena",
+#          "domains": [
+#            "garena.com"
+#          ]
+#        },
+#        {
+#          "key": "krafton",
+#          "label": "Krafton — PUBG on PC",
+#          "domains": [
+#            "krafton.com",
+#            "pubg.com"
+#          ]
+#        },
+#        {
+#          "key": "tencentgames",
+#          "label": "Tencent Games & GameLoop",
+#          "domains": [
+#            "gameloop.com",
+#            "tencentgames.com"
+#          ]
+#        },
+#        {
+#          "key": "unity",
+#          "label": "Unity engine",
+#          "domains": [
 #            "unity.com",
 #            "unity3d.com",
 #            "vuforia.com"
 #          ]
+#        },
+#        {
+#          "key": "misc",
+#          "label": "Odds and ends",
+#          "domains": [
+#            "badguitarstudio.com",
+#            "battlecode.org",
+#            "gameranger.com",
+#            "incredibuild.com"
+#          ]
 #        }
-#      ]
+#      ],
+#      "section": "games"
 #    },
 #    {
 #      "key": "netflix",
@@ -15584,6 +16784,21 @@ exit 0
 #            "nflxvideo.net"
 #          ]
 #        }
+#      ],
+#      "section": "media"
+#    },
+#    {
+#      "key": "kick",
+#      "label": "Kick",
+#      "section": "media",
+#      "groups": [
+#        {
+#          "key": "main",
+#          "label": "همه",
+#          "domains": [
+#            "kick.com"
+#          ]
+#        }
 #      ]
 #    },
 #    {
@@ -15594,8 +16809,26 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "jtvnw.net",
 #            "ttvnw.net",
-#            "twitch.tv"
+#            "twitch.tv",
+#            "twitchcdn.net"
+#          ]
+#        }
+#      ],
+#      "section": "media"
+#    },
+#    {
+#      "key": "soundcloud",
+#      "label": "SoundCloud",
+#      "section": "media",
+#      "groups": [
+#        {
+#          "key": "main",
+#          "label": "همه",
+#          "domains": [
+#            "sndcdn.com",
+#            "soundcloud.com"
 #          ]
 #        }
 #      ]
@@ -15608,11 +16841,15 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "audio-ak-spotify-com.akamaized.net",
 #            "scdn.co",
-#            "spotify.com"
+#            "spoti.fi",
+#            "spotify.com",
+#            "spotifycdn.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "media"
 #    },
 #    {
 #      "key": "openai",
@@ -15628,7 +16865,8 @@ exit 0
 #            "openai.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "ai"
 #    },
 #    {
 #      "key": "anthropic",
@@ -15642,38 +16880,46 @@ exit 0
 #            "claude.ai"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "ai"
 #    },
 #    {
 #      "key": "otherai",
-#      "label": "هوش مصنوعی دیگر",
+#      "label": "Other AI",
 #      "groups": [
 #        {
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "bing.com",
 #            "codeium.com",
+#            "copilot.microsoft.com",
 #            "cursor.com",
 #            "cursor.sh",
 #            "deepmind.google",
 #            "deepseek.com",
+#            "grok.com",
 #            "groq.com",
 #            "hf.co",
 #            "huggingface.co",
 #            "kaggle.com",
 #            "kaggle.net",
 #            "kaggleusercontent.com",
+#            "midjourney.com",
 #            "mistral.ai",
 #            "ollama.com",
 #            "openrouter.ai",
 #            "perplexity.ai",
+#            "poe.com",
 #            "tensorflow.org",
 #            "together.ai",
 #            "windsurf.com",
-#            "x.ai"
+#            "x.ai",
+#            "you.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "ai"
 #    },
 #    {
 #      "key": "github",
@@ -15689,7 +16935,8 @@ exit 0
 #            "githubusercontent.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "gitlab",
@@ -15707,7 +16954,8 @@ exit 0
 #            "gitpod.io"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "docker",
@@ -15728,11 +16976,12 @@ exit 0
 #            "registry.k8s.io"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "packages",
-#      "label": "مخازن پکیج",
+#      "label": "Package registries",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -15772,7 +17021,8 @@ exit 0
 #            "yarnpkg.org"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "microsoft",
@@ -15793,7 +17043,8 @@ exit 0
 #            "vscode.dev"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "jetbrains",
@@ -15806,7 +17057,8 @@ exit 0
 #            "jetbrains.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "adobe",
@@ -15820,7 +17072,8 @@ exit 0
 #            "adobelogin.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "nvidia",
@@ -15831,10 +17084,14 @@ exit 0
 #          "label": "همه",
 #          "domains": [
 #            "geforce.com",
-#            "nvidia.com"
+#            "geforcenow.com",
+#            "gfn.am",
+#            "nvidia.com",
+#            "nvidiagrid.net"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "other"
 #    },
 #    {
 #      "key": "apple",
@@ -15847,7 +17104,8 @@ exit 0
 #            "apple.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "other"
 #    },
 #    {
 #      "key": "google",
@@ -15888,6 +17146,7 @@ exit 0
 #            "fiber.google.com",
 #            "firebase.google.com",
 #            "gemini.google.com",
+#            "ggpht.com",
 #            "google-analytics.com",
 #            "google.ai",
 #            "googleadservices.com",
@@ -15910,8 +17169,18 @@ exit 0
 #            "tagmanager.google.com",
 #            "withgoogle.com"
 #          ]
+#        },
+#        {
+#          "key": "download",
+#          "label": "دانلود و آپدیت",
+#          "domains": [
+#            "gvt1.com",
+#            "gvt2.com"
+#          ],
+#          "section": "downloads"
 #        }
-#      ]
+#      ],
+#      "section": "infra"
 #    },
 #    {
 #      "key": "discord",
@@ -15921,13 +17190,21 @@ exit 0
 #          "key": "main",
 #          "label": "همه",
 #          "domains": [
+#            "dis.gd",
+#            "discord-activities.com",
+#            "discord.co",
 #            "discord.com",
 #            "discord.gg",
+#            "discord.gift",
+#            "discord.new",
 #            "discordapp.com",
-#            "discordapp.net"
+#            "discordapp.net",
+#            "discordcdn.com",
+#            "discordstatus.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "media"
 #    },
 #    {
 #      "key": "slackzoom",
@@ -15943,7 +17220,8 @@ exit 0
 #            "zoom.us"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "media"
 #    },
 #    {
 #      "key": "figma",
@@ -15964,11 +17242,12 @@ exit 0
 #            "zeplin.io"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "cloud",
-#      "label": "کلاود و هاستینگ",
+#      "label": "Cloud & hosting",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16009,11 +17288,12 @@ exit 0
 #            "zeit.co"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "infra"
 #    },
 #    {
 #      "key": "education",
-#      "label": "آموزش و مرجع",
+#      "label": "Learning & reference",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16063,11 +17343,12 @@ exit 0
 #            "wolframalpha.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "other"
 #    },
 #    {
 #      "key": "hardware",
-#      "label": "سخت‌افزار و درایور",
+#      "label": "Hardware & drivers",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16093,6 +17374,7 @@ exit 0
 #            "ni.com",
 #            "nirsoft.net",
 #            "qualcomm.com",
+#            "radeon.com",
 #            "raspberrypi.com",
 #            "softonic.com",
 #            "st.com",
@@ -16102,11 +17384,12 @@ exit 0
 #            "xilinx.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "other"
 #    },
 #    {
 #      "key": "finance",
-#      "label": "پرداخت و مالی",
+#      "label": "Payments & finance",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16124,11 +17407,12 @@ exit 0
 #            "upwork.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "other"
 #    },
 #    {
 #      "key": "webdev",
-#      "label": "ابزار وب و فریم‌ورک",
+#      "label": "Web tools & frameworks",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16224,11 +17508,12 @@ exit 0
 #            "web.dev"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "dev"
 #    },
 #    {
 #      "key": "assets",
-#      "label": "تصویر، فونت و قالب",
+#      "label": "Images, fonts & templates",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16255,11 +17540,12 @@ exit 0
 #            "wpastra.com"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "infra"
 #    },
 #    {
 #      "key": "analytics",
-#      "label": "تحلیل و تبلیغات",
+#      "label": "Analytics & ads",
 #      "groups": [
 #        {
 #          "key": "main",
@@ -16269,6 +17555,7 @@ exit 0
 #            "bugsnag.com",
 #            "count.ly",
 #            "crashlytics.com",
+#            "datadoghq.com",
 #            "expo.io",
 #            "fabric.io",
 #            "fbsbx.com",
@@ -16282,22 +17569,35 @@ exit 0
 #            "sentry.io"
 #          ]
 #        }
-#      ]
+#      ],
+#      "section": "infra"
 #    },
 #    {
 #      "key": "bypass",
-#      "label": "دور زده‌ها",
+#      "label": "Never routed",
 #      "groups": [
 #        {
 #          "key": "ea",
 #          "label": "EA — سرورهای بازی",
 #          "opt_in": true,
+#          "locked": true,
 #          "note": "روشن کردنش بازی‌های EA را از سرور جدا می‌کند — این‌ها روی ۴۴۳ نیستند",
 #          "domains": [
 #            "gosredirector.ea.com",
+#            "blazeredirector.ea.com",
 #            "blaze.ea.com",
 #            "gameservices.ea.com",
 #            "tnt-ea.com"
+#          ]
+#        },
+#        {
+#          "key": "demonware",
+#          "label": "Call of Duty — Demonware",
+#          "opt_in": true,
+#          "locked": true,
+#          "note": "روشن کردنش کالاف و وارزون را از سرور جدا می‌کند — این‌ها روی ۴۴۳ نیستند",
+#          "domains": [
+#            "demonware.net"
 #          ]
 #        },
 #        {
@@ -16342,8 +17642,62 @@ exit 0
 #          "domains": [
 #            "core.windows.net"
 #          ]
+#        },
+#        {
+#          "key": "voice",
+#          "label": "Discord, Valorant & League voice",
+#          "opt_in": true,
+#          "note": "روشن کردنش صدا را قطع می‌کند — این‌ها روی UDP کار می‌کنند و رله فقط ۸۰ و ۴۴۳ را می‌برد. اسم discord.media همان چیزی است که کلاینت با آن فاصلهٔ هر منطقهٔ صوتی را می‌سنجد؛ رد کردنش باعث می‌شود همیشه منطقهٔ اشتباه انتخاب شود",
+#          "domains": [
+#            "discord.media",
+#            "vivox.com"
+#          ]
+#        },
+#        {
+#          "key": "steam",
+#          "label": "Steam — sign-in channel",
+#          "opt_in": true,
+#          "note": "روشن کردنش ورود استیم را کند می‌کند — کلاینت روی پورت‌های ۲۷۰۱۸ تا ۲۷۰۲۴ به این اسم وصل می‌شود و رله فقط ۸۰ و ۴۴۳ را می‌برد، پس منتظر می‌ماند و بعد به لیست آی‌پی‌ها برمی‌گردد. فروشگاه و انجمن استیم همچنان از سرور رد می‌شوند",
+#          "domains": [
+#            "steamserver.net"
+#          ]
 #        }
-#      ]
+#      ],
+#      "section": "bypass"
+#    }
+#  ],
+#  "sections": [
+#    {
+#      "key": "games",
+#      "label": "بازی‌ها"
+#    },
+#    {
+#      "key": "downloads",
+#      "label": "دانلودها"
+#    },
+#    {
+#      "key": "ai",
+#      "label": "هوش مصنوعی"
+#    },
+#    {
+#      "key": "media",
+#      "label": "رسانه و ارتباط"
+#    },
+#    {
+#      "key": "dev",
+#      "label": "برنامه‌نویسی و ابزار"
+#    },
+#    {
+#      "key": "infra",
+#      "label": "زیرساخت و شبکه"
+#    },
+#    {
+#      "key": "other",
+#      "label": "بقیه"
+#    },
+#    {
+#      "key": "bypass",
+#      "label": "دور زده‌ها"
 #    }
 #  ]
 #}
