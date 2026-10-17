@@ -151,7 +151,8 @@ check("and reports them", 'report["exit_pings"] = exit_pings' in ssrc)
 print("nginx loads what is written")
 relay_tpl = read("templates", "relay-nginx.conf")
 check("the relay's nginx takes the map", "include /etc/nginx/smartdns-exits.conf;" in relay_tpl
-      and "proxy_pass $smartdns_exit_https;" in relay_tpl and "proxy_pass $smartdns_exit_http;" in relay_tpl)
+      and "proxy_pass $smartdns_route_https;" in relay_tpl
+      and "proxy_pass $smartdns_exit_http;" in relay_tpl)
 nginx = shutil.which("nginx")
 
 
@@ -194,7 +195,11 @@ else:
     sync.CFG["TUNNEL"] = "off"
     first = ("# written by the installer; smartdns-sync keeps it from here\n"
              "map $remote_addr $smartdns_exit_https {\n    default %s:443;\n}\n"
-             "map $remote_addr $smartdns_exit_http {\n    default %s:80;\n}\n" % (MAIN, MAIN))
+             "map $remote_addr $smartdns_exit_http {\n    default %s:80;\n}\n"
+             # The third map is the installer's too: nginx.conf passes to it
+             # from the first boot, before any name has an exit of its own.
+             "map $ssl_preread_server_name $smartdns_route_https {\n"
+             "    hostnames;\n    default $smartdns_exit_https;\n}\n" % (MAIN, MAIN))
     ok, why = nginx_test("relay-first", plain, first)
     check("and with the installer's first map, before any sync", ok, why)
     extra = read("templates", "exit-nginx.conf").replace("__RELAY_IP__", RELAY)

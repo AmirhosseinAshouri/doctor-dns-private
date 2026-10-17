@@ -284,6 +284,20 @@ CREATE TABLE IF NOT EXISTS game_hosts (
     at      TEXT NOT NULL
 );
 
+-- A name that leaves by an exit of its own, whichever exit its customer is
+-- on. For a service that refuses one exit's address and accepts another's:
+-- EA's Ultimate Team resets one of ours during the TLS handshake and answers
+-- another without complaint, and moving the customer moves everything they do,
+-- not only the service that needed moving. The host is one name, or a suffix
+-- written *.name; exit_id 0 is the relay's own exit. Port 443 only - the name
+-- is read from the handshake, and port 80 carries no name a stream proxy sees.
+CREATE TABLE IF NOT EXISTS name_exits (
+    host       TEXT PRIMARY KEY,
+    exit_id    INTEGER NOT NULL DEFAULT 0,
+    note       TEXT,
+    created_at TEXT NOT NULL
+);
+
 -- Extra exits: servers abroad, installed as "extra exit", that carry traffic
 -- and nothing else - no database, no bot. The main exit is not a row: it is
 -- whichever one each relay was installed with, id 0 wherever an exit is named.
@@ -477,6 +491,17 @@ def parse_ts(s):
 def valid_ip(s):
     m = IPV4.match(s or "")
     return bool(m) and all(0 <= int(p) <= 255 for p in m.groups())
+
+
+# A name an exit can be chosen for: one hostname, or every name under one,
+# written *.name. The same shapes nginx's own map accepts, checked here so a
+# typo is refused in the panel rather than by nginx on a relay a minute later.
+HOST_PATTERN = re.compile(
+    r"^(?:\*\.)?(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$")
+
+
+def valid_host_pattern(s):
+    return bool(s) and len(s) <= 253 and bool(HOST_PATTERN.match(s))
 
 
 def normal_phone(s):
@@ -879,6 +904,36 @@ class Store:
 
     def active_exits(self):
         return self.q("SELECT * FROM exits WHERE active = 1 ORDER BY id")
+
+    def name_exits(self):
+        """Every name with an exit of its own, as the operator entered them."""
+        return self.q("SELECT * FROM name_exits ORDER BY host")
+
+    def set_name_exit(self, host, exit_id, note=""):
+        """Point one name at one exit. Returns the name as it was stored, or
+        None if it is not a name nginx could map."""
+        host = (host or "").strip().lower().rstrip(".").lstrip("@")
+        if host.startswith("."):
+            host = "*" + host
+        if not valid_host_pattern(host):
+            return None
+        self.run("INSERT INTO name_exits (host, exit_id, note, created_at)"
+                 " VALUES (?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET"
+                 " exit_id = excluded.exit_id, note = excluded.note",
+                 (host, int(exit_id), note or "", now()))
+        return host
+
+    def del_name_exit(self, host):
+        self.run("DELETE FROM name_exits WHERE host = ?", ((host or "").strip().lower(),))
+
+    def name_exit_map(self):
+        """{name: exit id}, for the relays: only exits that still exist."""
+        live = {r["id"] for r in self.active_exits()}
+        out = {}
+        for r in self.name_exits():
+            if r["exit_id"] == 0 or r["exit_id"] in live:
+                out[r["host"]] = str(r["exit_id"])
+        return out
 
     def note_client_rtt(self, relay, rtts):
         """Keep how far each customer is from the relay, latest reading only."""
@@ -2141,6 +2196,7 @@ class API(http.server.BaseHTTPRequestHandler):
                                     "templates": self.store.template_names(),
                                     "ping_targets": ping_targets(CATALOGUE),
                                     "exits": exits,
+                                    "name_exits": self.store.name_exit_map(),
                                     })
 
         # ---- user panel, served by the relay on the customer's behalf ----

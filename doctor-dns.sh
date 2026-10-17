@@ -1277,8 +1277,15 @@ if [ "$ROLE" = relay ]; then
     # within a minute.
     note_file /etc/nginx/smartdns-exits.conf
     if ! grep -qsF "default ${EXIT_HTTPS};" /etc/nginx/smartdns-exits.conf; then
-        printf '# written by the installer; smartdns-sync keeps it from here\nmap $remote_addr $smartdns_exit_https {\n    default %s;\n}\nmap $remote_addr $smartdns_exit_http {\n    default %s;\n}\n' \
-            "$EXIT_HTTPS" "$EXIT_HTTP" > /etc/nginx/smartdns-exits.conf
+        {
+            printf '# written by the installer; smartdns-sync keeps it from here\n'
+            printf 'map $remote_addr $smartdns_exit_https {\n    default %s;\n}\n' "$EXIT_HTTPS"
+            printf 'map $remote_addr $smartdns_exit_http {\n    default %s;\n}\n' "$EXIT_HTTP"
+            # No name has an exit of its own until the panel says so; the map
+            # has to be here all the same, because nginx.conf passes to it.
+            printf 'map $ssl_preread_server_name $smartdns_route_https {\n'
+            printf '    hostnames;\n    default $smartdns_exit_https;\n}\n'
+        } > /etc/nginx/smartdns-exits.conf
         NGINX_CHANGED=1
     fi
     install_payload RELAY_NGINX /etc/nginx/nginx.conf && NGINX_CHANGED=1 || true
@@ -2563,9 +2570,17 @@ exit 0
 #
 #    server {
 #        listen 443;
+#        # The name in the handshake, so a service the operator has pointed at
+#        # an exit of its own leaves by that one whatever exit its customer is
+#        # on. $smartdns_route_https is that map, and its default is the
+#        # customer's own exit, so a name with no rule is untouched. A client
+#        # that sends no name - or none this soon - takes the default too, and
+#        # waits five seconds at most to find that out.
+#        ssl_preread on;
+#        preread_timeout 5s;
 #        proxy_connect_timeout 10s;
 #        proxy_timeout 10m;
-#        proxy_pass $smartdns_exit_https;
+#        proxy_pass $smartdns_route_https;
 #    }
 #
 #    # Port 80 is forwarded rather than answered. It used to return a 301 to
@@ -3818,6 +3833,20 @@ exit 0
 #    at      TEXT NOT NULL
 #);
 #
+#-- A name that leaves by an exit of its own, whichever exit its customer is
+#-- on. For a service that refuses one exit's address and accepts another's:
+#-- EA's Ultimate Team resets one of ours during the TLS handshake and answers
+#-- another without complaint, and moving the customer moves everything they do,
+#-- not only the service that needed moving. The host is one name, or a suffix
+#-- written *.name; exit_id 0 is the relay's own exit. Port 443 only - the name
+#-- is read from the handshake, and port 80 carries no name a stream proxy sees.
+#CREATE TABLE IF NOT EXISTS name_exits (
+#    host       TEXT PRIMARY KEY,
+#    exit_id    INTEGER NOT NULL DEFAULT 0,
+#    note       TEXT,
+#    created_at TEXT NOT NULL
+#);
+#
 #-- Extra exits: servers abroad, installed as "extra exit", that carry traffic
 #-- and nothing else - no database, no bot. The main exit is not a row: it is
 #-- whichever one each relay was installed with, id 0 wherever an exit is named.
@@ -4011,6 +4040,17 @@ exit 0
 #def valid_ip(s):
 #    m = IPV4.match(s or "")
 #    return bool(m) and all(0 <= int(p) <= 255 for p in m.groups())
+#
+#
+## A name an exit can be chosen for: one hostname, or every name under one,
+## written *.name. The same shapes nginx's own map accepts, checked here so a
+## typo is refused in the panel rather than by nginx on a relay a minute later.
+#HOST_PATTERN = re.compile(
+#    r"^(?:\*\.)?(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$")
+#
+#
+#def valid_host_pattern(s):
+#    return bool(s) and len(s) <= 253 and bool(HOST_PATTERN.match(s))
 #
 #
 #def normal_phone(s):
@@ -4413,6 +4453,36 @@ exit 0
 #
 #    def active_exits(self):
 #        return self.q("SELECT * FROM exits WHERE active = 1 ORDER BY id")
+#
+#    def name_exits(self):
+#        """Every name with an exit of its own, as the operator entered them."""
+#        return self.q("SELECT * FROM name_exits ORDER BY host")
+#
+#    def set_name_exit(self, host, exit_id, note=""):
+#        """Point one name at one exit. Returns the name as it was stored, or
+#        None if it is not a name nginx could map."""
+#        host = (host or "").strip().lower().rstrip(".").lstrip("@")
+#        if host.startswith("."):
+#            host = "*" + host
+#        if not valid_host_pattern(host):
+#            return None
+#        self.run("INSERT INTO name_exits (host, exit_id, note, created_at)"
+#                 " VALUES (?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET"
+#                 " exit_id = excluded.exit_id, note = excluded.note",
+#                 (host, int(exit_id), note or "", now()))
+#        return host
+#
+#    def del_name_exit(self, host):
+#        self.run("DELETE FROM name_exits WHERE host = ?", ((host or "").strip().lower(),))
+#
+#    def name_exit_map(self):
+#        """{name: exit id}, for the relays: only exits that still exist."""
+#        live = {r["id"] for r in self.active_exits()}
+#        out = {}
+#        for r in self.name_exits():
+#            if r["exit_id"] == 0 or r["exit_id"] in live:
+#                out[r["host"]] = str(r["exit_id"])
+#        return out
 #
 #    def note_client_rtt(self, relay, rtts):
 #        """Keep how far each customer is from the relay, latest reading only."""
@@ -5675,6 +5745,7 @@ exit 0
 #                                    "templates": self.store.template_names(),
 #                                    "ping_targets": ping_targets(CATALOGUE),
 #                                    "exits": exits,
+#                                    "name_exits": self.store.name_exit_map(),
 #                                    })
 #
 #        # ---- user panel, served by the relay on the customer's behalf ----
@@ -7120,6 +7191,36 @@ exit 0
 #    return out
 #
 #
+## A name may be given an exit of its own: one hostname, or a suffix written
+## *.name, pointing at an exit id ("0" being this relay's own). It exists
+## because a service can refuse one exit's address and accept another's - EA's
+## Ultimate Team resets one of ours at the TLS handshake and answers another
+## with no complaint - and moving the customer to the other exit moves all
+## their traffic, not just the service that needed it.
+#NAME_EXITS_MAX = 200
+#HOSTNAME_RE = re.compile(
+#    r"^(?:\*\.)?(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$")
+#
+#
+#def clean_name_exits(names, exits):
+#    """{name: exit id}, keeping only names nginx can map and exits that exist."""
+#    out = {}
+#    if not isinstance(names, dict):
+#        return out
+#    for host, eid in sorted(names.items())[:NAME_EXITS_MAX]:
+#        if not (isinstance(host, str) and isinstance(eid, (str, int))):
+#            continue
+#        host = host.strip().lower().rstrip(".")
+#        eid = str(eid)
+#        if len(host) > 253 or not HOSTNAME_RE.match(host):
+#            continue
+#        # "0" is this relay's own exit, which is not in the list of extra ones.
+#        if eid != "0" and eid not in exits:
+#            continue
+#        out[host] = eid
+#    return out
+#
+#
 #def note_exit_targets(exits):
 #    clean = clean_exits(exits)
 #    with PING_LOCK:
@@ -7244,7 +7345,15 @@ exit 0
 #    return "%s:443" % ip, "%s:80" % ip
 #
 #
-#def exits_conf(exits, assignment, tunnels=None):
+#def exit_target(eid, exits, proto):
+#    """What to write in a map for one exit id, for one protocol."""
+#    if eid == "0":
+#        https, http = default_exit()
+#        return https if proto == "https" else http
+#    return "exit_%s_%s" % (eid, proto)
+#
+#
+#def exits_conf(exits, assignment, tunnels=None, name_exits=None):
 #    """The nginx include: a map per protocol, and an upstream per extra exit.
 #
 #    A tunnelled exit is reached at its end of the tunnel on loopback, and falls
@@ -7261,6 +7370,17 @@ exit 0
 #            if eid in exits:
 #                lines.append("    %s exit_%s_%s;" % (ip, eid, proto))
 #        lines.append("}")
+#    # Where a name goes, whoever asked for it. The default is the map above -
+#    # the customer's own exit - so a name with no rule here is untouched, and
+#    # this map decides only the names the operator has named. Read from the
+#    # TLS handshake, so it is port 443 only: a stream proxy sees no Host on
+#    # port 80, and nothing is guessed from an address.
+#    lines.append("map $ssl_preread_server_name $smartdns_route_https {")
+#    lines.append("    hostnames;")
+#    lines.append("    default $smartdns_exit_https;")
+#    for host, eid in sorted((name_exits or {}).items()):
+#        lines.append("    %s %s;" % (host, exit_target(eid, exits, "https")))
+#    lines.append("}")
 #    tunnels = tunnels or {}
 #    for eid in sorted(exits, key=int):
 #        for i, (proto, port) in enumerate((("https", 443), ("http", 80))):
@@ -7283,7 +7403,7 @@ exit 0
 #    os.replace(tmp, EXITS_CONF)
 #
 #
-#def apply_exits(exits, assignment, tunnels=None):
+#def apply_exits(exits, assignment, tunnels=None, name_exits=None):
 #    """Point each address at its exit: rewrite the map and reload nginx - only
 #    when it has changed, and only if nginx accepts it."""
 #    if not (CFG or {}).get("EXIT_IP"):
@@ -7298,7 +7418,8 @@ exit 0
 #            continue
 #        if eid in exits:
 #            chosen[ip] = eid
-#    want = exits_conf(exits, chosen, tunnels)
+#    names = clean_name_exits(name_exits, exits)
+#    want = exits_conf(exits, chosen, tunnels, names)
 #    try:
 #        with open(EXITS_CONF) as fh:
 #            have = fh.read()
@@ -7318,7 +7439,8 @@ exit 0
 #    if r.returncode != 0:
 #        log(ERROR, "exits: nginx did not reload: %s" % (r.stderr or "").strip()[-200:])
 #        return False
-#    log(INFO, "exits: %d extra, %d addresses on one of them" % (len(exits), len(chosen)))
+#    log(INFO, "exits: %d extra, %d addresses on one of them, %d names of their own"
+#        % (len(exits), len(chosen), len(names)))
 #    return True
 #
 #
@@ -7429,7 +7551,8 @@ exit 0
 #    try:
 #        tunnels = apply_exit_tunnels(exits)
 #        apply_exits(exits, {a["ip"]: str(a.get("exit") or "")
-#                            for a in answer.get("allowed") or [] if a.get("ip")}, tunnels)
+#                            for a in answer.get("allowed") or [] if a.get("ip")},
+#                    tunnels, answer.get("name_exits"))
 #    except Exception as e:
 #        log_exception("exits failed: %s" % e)
 #
@@ -10268,6 +10391,56 @@ exit 0
 #        out.append("<p class='muted'>زیردامنه‌ها خودکار شامل می‌شوند. این‌ها در سرویس "
 #                   "«دامنه‌های دلخواه» جمع می‌شوند، پس در هر قالب می‌شود تیکشان را "
 #                   "برداشت. به‌علاوهٔ %d دامنه‌ای که با نصاب می‌آید.</p></div>" % shipped)
+#
+#        # Which exit a name leaves by - for a service that refuses one exit's
+#        # address and accepts another's.
+#        choices = exit_choices()
+#        rules = STORE.q("SELECT * FROM name_exits ORDER BY host")
+#        names = dict(choices)
+#        out.append("<div class='card'><h2>خروجی برای یک نام (%d)</h2>" % len(rules))
+#        out.append("<p class='muted'>وقتی سرویسی آی‌پی یک خروجی را قبول نمی‌کند و "
+#                   "خروجی دیگری را قبول می‌کند، همان یک نام را از خروجی دوم بفرستید؛ "
+#                   "بقیهٔ ترافیک مشتری سر جایش می‌ماند. نام از هندشیک TLS خوانده "
+#                   "می‌شود، پس فقط روی ۴۴۳ کار می‌کند. <code>*.example.com</code> "
+#                   "همهٔ زیردامنه‌ها را می‌گیرد.</p>")
+#        picker = "".join("<option value='%s'>%s</option>"
+#                         % (html.escape(eid), html.escape(name)) for eid, name in choices)
+#        out.append("<form method='post' action='/%s/name-exit-add' class='row' "
+#                   "style='margin-bottom:14px'>"
+#                   "<input name='host' placeholder='*.futc-ext.gcp.ea.com' "
+#                   "style='min-width:240px'>"
+#                   "<select name='exit_id'>%s</select>"
+#                   "<input name='note' placeholder='یادداشت (اختیاری)'>"
+#                   "<button>افزودن</button></form>" % (p, picker))
+#        if rules:
+#            out.append("<table><tr><th>نام</th><th>از این خروجی</th><th>یادداشت</th>"
+#                       "<th></th></tr>")
+#            for r in rules:
+#                out.append("<tr><td><code>%s</code></td><td>%s</td>"
+#                           "<td class='muted'>%s</td>"
+#                           "<td><form method='post' action='/%s/name-exit-del'>"
+#                           "<input type='hidden' name='host' value='%s'>"
+#                           "<button class='danger'>حذف</button></form></td></tr>"
+#                           % (html.escape(r["host"]),
+#                              html.escape(names.get(str(r["exit_id"]),
+#                                                    "#%s (نیست)" % r["exit_id"])),
+#                              html.escape(r["note"] or ""), p, html.escape(r["host"])))
+#            out.append("</table>")
+#        known = [(h, why) for h, why in KNOWN_SPLITS
+#                 if not any(r["host"] == h for r in rules)]
+#        if known and len(choices) > 1:
+#            out.append("<p class='muted' style='margin-top:14px'>می‌دانیم که این یکی "
+#                       "به خروجی خودش نیاز دارد:</p>")
+#            for h, why in known:
+#                out.append("<form method='post' action='/%s/name-exit-add' class='row'>"
+#                           "<input type='hidden' name='host' value='%s'>"
+#                           "<input type='hidden' name='note' value='%s'>"
+#                           "<code>%s</code><select name='exit_id'>%s</select>"
+#                           "<button class='ghost'>افزودن</button>"
+#                           "<span class='muted'>%s</span></form>"
+#                           % (p, html.escape(h), html.escape(why), html.escape(h),
+#                              picker, html.escape(why)))
+#        out.append("</div>")
 #        return "".join(out)
 #
 #    def settings(self):
@@ -10566,6 +10739,25 @@ exit 0
 #                      " VALUES (?, ?, ?)", (domain, one("note") or None, now()))
 #            return self.redirect("domains?m=%s اضافه شد" % domain)
 #
+#        if rest == "name-exit-add":
+#            host = clean_host_pattern(one("host"))
+#            if not host:
+#                return self.redirect("domains?m=!این یک نام درست نیست")
+#            eid = one("exit_id", "0")
+#            if eid not in dict(exit_choices()):
+#                return self.redirect("domains?m=!آن خروجی وجود ندارد")
+#            STORE.run("INSERT INTO name_exits (host, exit_id, note, created_at)"
+#                      " VALUES (?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET"
+#                      " exit_id = excluded.exit_id, note = excluded.note",
+#                      (host, int(eid), one("note") or None, now()))
+#            # The relays pick it up on their next sync, within a minute.
+#            return self.redirect("domains?m=%s از این خروجی می‌رود" % host)
+#
+#        if rest == "name-exit-del":
+#            STORE.run("DELETE FROM name_exits WHERE host = ?",
+#                      ((one("host") or "").strip().lower(),))
+#            return self.redirect("domains?m=حذف شد؛ آن نام به خروجی خود مشتری برگشت")
+#
 #        if rest == "domain-del":
 #            STORE.run("DELETE FROM custom_domains WHERE domain = ?", (one("domain"),))
 #            return self.redirect("domains?m=حذف شد")
@@ -10771,6 +10963,38 @@ exit 0
 #    out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زیبال از داخل خود "
 #               "ربات، در منوی «🛠 مدیریت»، تنظیم می‌شوند.</p></div>")
 #    return "".join(out)
+#
+#
+## A name an exit can be chosen for: one hostname, or everything under one,
+## written *.name. The same shapes nginx's map accepts; checked here so a typo
+## is refused on this page instead of by nginx on a relay a minute later.
+#HOST_PATTERN = re.compile(
+#    r"^(?:\*\.)?(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$")
+## What this exists for, so the operator does not have to remember the name:
+## the service we have actually seen refuse one exit and accept another.
+#KNOWN_SPLITS = (("*.futc-ext.gcp.ea.com", "التیمیت تیم FC (EA) — روی گوگل‌کلاد"),)
+#
+#
+#def clean_host_pattern(raw):
+#    """What to store for a name the operator typed, or None if it is not one."""
+#    host = (raw or "").strip().lower().rstrip(".").lstrip("@")
+#    if host.startswith("*"):
+#        host = "*" + host.lstrip("*")
+#    if host.startswith("."):
+#        host = "*" + host
+#    if host.startswith("https://") or host.startswith("http://"):
+#        host = host.split("//", 1)[1].split("/", 1)[0]
+#    if not host or len(host) > 253 or not HOST_PATTERN.match(host):
+#        return None
+#    return host
+#
+#
+#def exit_choices():
+#    """[(id as text, name)] for the exits a name can be sent out by."""
+#    out = [("0", setting("main_exit_name") or "سرور اصلی")]
+#    for r in STORE.q("SELECT * FROM exits WHERE active = 1 ORDER BY id"):
+#        out.append((str(r["id"]), r["name"]))
+#    return out
 #
 #
 #def ms(value):

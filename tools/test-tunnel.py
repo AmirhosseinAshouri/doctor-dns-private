@@ -223,14 +223,15 @@ on, off = render(True), render(False)
 # here: the tunnel's upstreams with one, the exit's own address without. The
 # installer writes that default from the same two variables.
 check("with a tunnel, both ports go through it",
-      "proxy_pass $smartdns_exit_https;" in on and "proxy_pass $smartdns_exit_http;" in on
+      "proxy_pass $smartdns_route_https;" in on and "proxy_pass $smartdns_exit_http;" in on
       and "EXIT_HTTPS=to_exit_https; EXIT_HTTP=to_exit_http" in LOGIC
-      and '"$EXIT_HTTPS" "$EXIT_HTTP" > /etc/nginx/smartdns-exits.conf' in LOGIC, on[-600:])
+      and '"$EXIT_HTTPS"' in LOGIC and '"$EXIT_HTTP"' in LOGIC
+      and '} > /etc/nginx/smartdns-exits.conf' in LOGIC, on[-600:])
 check("  with the exit itself as the fallback",
       "server 203.0.113.2:443 backup;" in on and "server 203.0.113.2:80 backup;" in on)
 check("  and the tunnel's end first", on.index("127.0.0.1:18443") < on.index("203.0.113.2:443 backup"))
 check("without one, straight to the exit as before",
-      "proxy_pass $smartdns_exit_https;" in off and "proxy_pass $smartdns_exit_http;" in off
+      "proxy_pass $smartdns_route_https;" in off and "proxy_pass $smartdns_exit_http;" in off
       and 'NO_TUNNEL=1; EXIT_HTTPS="$EXIT_IP:443"; EXIT_HTTP="$EXIT_IP:80"' in LOGIC)
 check("  and no trace of the tunnel", "to_exit" not in off and "18443" not in off)
 for name, text in (("with", on), ("without", off)):
