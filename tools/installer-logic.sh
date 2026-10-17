@@ -177,9 +177,9 @@ enable_service() {
 # fetched from his own releases when asked for and checked against the hashes
 # pinned here - never copied into this project, and never a version nobody here
 # has tried.
-BACKPACK_VERSION="v1.8.0"
-BACKPACK_SHA_amd64="0fca707e413c0ca051fac1bf47a8f5bc870bc54a67866415b75fd93fbd91f9b8"
-BACKPACK_SHA_arm64="b93d4b1c76d44e2168a66f7e3e27173b07682d012b3cdf3917f768ea7064a764"
+BACKPACK_VERSION="v1.8.5"
+BACKPACK_SHA_amd64="e80c4da9bdcece9e7a82305e572fdfde9a395a68a985fdd835c1af8ff248b395"
+BACKPACK_SHA_arm64="9d9eaa951f8bd3f7b786be94916517c4ec900af0eeaac893b89d03d9867643f4"
 BACKPACK_BIN=/usr/local/lib/smart-dns/backpack
 TUNNEL_DIR=/etc/smart-dns/tunnel
 TUNNEL_NFT=/etc/nftables.d/40-smartdns-tunnel.conf
@@ -351,7 +351,7 @@ NOTES
 # Fetch the pinned BackPack, or take it from BACKPACK_TARBALL. Refuses anything
 # whose hash does not match. Returns non-zero, having said why, on failure.
 install_backpack() {
-    local arch sha tmp
+    local arch sha tmp unit
     case "$(uname -m)" in
         x86_64|amd64) arch=amd64 ;;
         aarch64|arm64) arch=arm64 ;;
@@ -385,6 +385,15 @@ install_backpack() {
     printf '%s %s\n' "$BACKPACK_VERSION" "$sha" > "$BACKPACK_BIN.version"
     rm -rf "$tmp"
     info "BackPack $BACKPACK_VERSION installed, its hash checked"
+    # A tunnel already running holds the binary that was replaced under it and
+    # goes on running it until something restarts it - so the upgrade reaches
+    # the file and not the tunnel, and the version this installer prints is not
+    # the version carrying the traffic. Every tunnel on this machine: the pair's
+    # own, and one per extra exit.
+    for unit in $(systemctl list-units --plain --no-legend --state=active \
+                  'smartdns-tunnel*' 2>/dev/null | awk '{print $1}'); do
+        systemctl restart "$unit" && info "$unit restarted on the new BackPack" || true
+    done
     info "BackPack is the work of Amin Mohammadi - github.com/AminMGMT/BackPack (AGPL-3.0)"
 }
 
