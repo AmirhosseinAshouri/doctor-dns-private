@@ -298,6 +298,34 @@ such an exit directly and says so in `smartdns-logs`.
 The pair's own tunnel is unchanged: relay and main exit, its settings carried
 by the pairing token.
 
+#### One name out through one exit
+
+A service can refuse one exit's address and accept another's. FC 27's Ultimate
+Team front end, on Google Cloud, reset one of our exits during the TLS
+handshake and answered another with a plain `404` from the same second. Moving
+the customer to the working exit fixes the game and moves everything else they
+do as well - including whatever only works on the exit they were on.
+
+So a name can have an exit of its own. In the admin panel, **دامنه‌ها →
+خروجی برای یک نام**: the name, and which exit it leaves by. `*.example.com`
+covers every name under it, and the page offers EA's Ultimate Team hosts
+ready to point somewhere, since that is the one we have met.
+
+* The relay reads the name out of the TLS handshake, so this is **port 443
+  only**. Port 80 carries no name a stream proxy can see, and nothing is
+  guessed from an address.
+* A name with no rule is untouched: it goes by whichever exit its customer is
+  on, exactly as before.
+* The rule reaches the relays on their next sync, within a minute, and only
+  once `nginx -t` has accepted the new map - otherwise the old one stays and
+  the refusal is in `smartdns-logs`.
+* An exit you switch off takes its names with it; they fall back to the
+  customer's exit until it is back.
+
+`smartdns-rules check NAME` still answers the DNS side of a name. This decides
+where the connection goes after that, which is a different question: a name can
+be routed correctly and still fail because the exit it leaves by is refused.
+
 #### Deciding where the next exit goes
 
 The admin panel's **مانیتورینگ** page is that decision, on one screen:

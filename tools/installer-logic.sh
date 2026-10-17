@@ -1277,8 +1277,15 @@ if [ "$ROLE" = relay ]; then
     # within a minute.
     note_file /etc/nginx/smartdns-exits.conf
     if ! grep -qsF "default ${EXIT_HTTPS};" /etc/nginx/smartdns-exits.conf; then
-        printf '# written by the installer; smartdns-sync keeps it from here\nmap $remote_addr $smartdns_exit_https {\n    default %s;\n}\nmap $remote_addr $smartdns_exit_http {\n    default %s;\n}\n' \
-            "$EXIT_HTTPS" "$EXIT_HTTP" > /etc/nginx/smartdns-exits.conf
+        {
+            printf '# written by the installer; smartdns-sync keeps it from here\n'
+            printf 'map $remote_addr $smartdns_exit_https {\n    default %s;\n}\n' "$EXIT_HTTPS"
+            printf 'map $remote_addr $smartdns_exit_http {\n    default %s;\n}\n' "$EXIT_HTTP"
+            # No name has an exit of its own until the panel says so; the map
+            # has to be here all the same, because nginx.conf passes to it.
+            printf 'map $ssl_preread_server_name $smartdns_route_https {\n'
+            printf '    hostnames;\n    default $smartdns_exit_https;\n}\n'
+        } > /etc/nginx/smartdns-exits.conf
         NGINX_CHANGED=1
     fi
     install_payload RELAY_NGINX /etc/nginx/nginx.conf && NGINX_CHANGED=1 || true

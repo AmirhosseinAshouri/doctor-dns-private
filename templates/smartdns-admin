@@ -1568,6 +1568,56 @@ class Admin(http.server.BaseHTTPRequestHandler):
         out.append("<p class='muted'>زیردامنه‌ها خودکار شامل می‌شوند. این‌ها در سرویس "
                    "«دامنه‌های دلخواه» جمع می‌شوند، پس در هر قالب می‌شود تیکشان را "
                    "برداشت. به‌علاوهٔ %d دامنه‌ای که با نصاب می‌آید.</p></div>" % shipped)
+
+        # Which exit a name leaves by - for a service that refuses one exit's
+        # address and accepts another's.
+        choices = exit_choices()
+        rules = STORE.q("SELECT * FROM name_exits ORDER BY host")
+        names = dict(choices)
+        out.append("<div class='card'><h2>خروجی برای یک نام (%d)</h2>" % len(rules))
+        out.append("<p class='muted'>وقتی سرویسی آی‌پی یک خروجی را قبول نمی‌کند و "
+                   "خروجی دیگری را قبول می‌کند، همان یک نام را از خروجی دوم بفرستید؛ "
+                   "بقیهٔ ترافیک مشتری سر جایش می‌ماند. نام از هندشیک TLS خوانده "
+                   "می‌شود، پس فقط روی ۴۴۳ کار می‌کند. <code>*.example.com</code> "
+                   "همهٔ زیردامنه‌ها را می‌گیرد.</p>")
+        picker = "".join("<option value='%s'>%s</option>"
+                         % (html.escape(eid), html.escape(name)) for eid, name in choices)
+        out.append("<form method='post' action='/%s/name-exit-add' class='row' "
+                   "style='margin-bottom:14px'>"
+                   "<input name='host' placeholder='*.futc-ext.gcp.ea.com' "
+                   "style='min-width:240px'>"
+                   "<select name='exit_id'>%s</select>"
+                   "<input name='note' placeholder='یادداشت (اختیاری)'>"
+                   "<button>افزودن</button></form>" % (p, picker))
+        if rules:
+            out.append("<table><tr><th>نام</th><th>از این خروجی</th><th>یادداشت</th>"
+                       "<th></th></tr>")
+            for r in rules:
+                out.append("<tr><td><code>%s</code></td><td>%s</td>"
+                           "<td class='muted'>%s</td>"
+                           "<td><form method='post' action='/%s/name-exit-del'>"
+                           "<input type='hidden' name='host' value='%s'>"
+                           "<button class='danger'>حذف</button></form></td></tr>"
+                           % (html.escape(r["host"]),
+                              html.escape(names.get(str(r["exit_id"]),
+                                                    "#%s (نیست)" % r["exit_id"])),
+                              html.escape(r["note"] or ""), p, html.escape(r["host"])))
+            out.append("</table>")
+        known = [(h, why) for h, why in KNOWN_SPLITS
+                 if not any(r["host"] == h for r in rules)]
+        if known and len(choices) > 1:
+            out.append("<p class='muted' style='margin-top:14px'>می‌دانیم که این یکی "
+                       "به خروجی خودش نیاز دارد:</p>")
+            for h, why in known:
+                out.append("<form method='post' action='/%s/name-exit-add' class='row'>"
+                           "<input type='hidden' name='host' value='%s'>"
+                           "<input type='hidden' name='note' value='%s'>"
+                           "<code>%s</code><select name='exit_id'>%s</select>"
+                           "<button class='ghost'>افزودن</button>"
+                           "<span class='muted'>%s</span></form>"
+                           % (p, html.escape(h), html.escape(why), html.escape(h),
+                              picker, html.escape(why)))
+        out.append("</div>")
         return "".join(out)
 
     def settings(self):
@@ -1866,6 +1916,25 @@ class Admin(http.server.BaseHTTPRequestHandler):
                       " VALUES (?, ?, ?)", (domain, one("note") or None, now()))
             return self.redirect("domains?m=%s اضافه شد" % domain)
 
+        if rest == "name-exit-add":
+            host = clean_host_pattern(one("host"))
+            if not host:
+                return self.redirect("domains?m=!این یک نام درست نیست")
+            eid = one("exit_id", "0")
+            if eid not in dict(exit_choices()):
+                return self.redirect("domains?m=!آن خروجی وجود ندارد")
+            STORE.run("INSERT INTO name_exits (host, exit_id, note, created_at)"
+                      " VALUES (?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET"
+                      " exit_id = excluded.exit_id, note = excluded.note",
+                      (host, int(eid), one("note") or None, now()))
+            # The relays pick it up on their next sync, within a minute.
+            return self.redirect("domains?m=%s از این خروجی می‌رود" % host)
+
+        if rest == "name-exit-del":
+            STORE.run("DELETE FROM name_exits WHERE host = ?",
+                      ((one("host") or "").strip().lower(),))
+            return self.redirect("domains?m=حذف شد؛ آن نام به خروجی خود مشتری برگشت")
+
         if rest == "domain-del":
             STORE.run("DELETE FROM custom_domains WHERE domain = ?", (one("domain"),))
             return self.redirect("domains?m=حذف شد")
@@ -2071,6 +2140,38 @@ def bot_card():
     out.append("<p class='muted'>پلن‌ها، شمارهٔ کارت و مرچنت زیبال از داخل خود "
                "ربات، در منوی «🛠 مدیریت»، تنظیم می‌شوند.</p></div>")
     return "".join(out)
+
+
+# A name an exit can be chosen for: one hostname, or everything under one,
+# written *.name. The same shapes nginx's map accepts; checked here so a typo
+# is refused on this page instead of by nginx on a relay a minute later.
+HOST_PATTERN = re.compile(
+    r"^(?:\*\.)?(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$")
+# What this exists for, so the operator does not have to remember the name:
+# the service we have actually seen refuse one exit and accept another.
+KNOWN_SPLITS = (("*.futc-ext.gcp.ea.com", "التیمیت تیم FC (EA) — روی گوگل‌کلاد"),)
+
+
+def clean_host_pattern(raw):
+    """What to store for a name the operator typed, or None if it is not one."""
+    host = (raw or "").strip().lower().rstrip(".").lstrip("@")
+    if host.startswith("*"):
+        host = "*" + host.lstrip("*")
+    if host.startswith("."):
+        host = "*" + host
+    if host.startswith("https://") or host.startswith("http://"):
+        host = host.split("//", 1)[1].split("/", 1)[0]
+    if not host or len(host) > 253 or not HOST_PATTERN.match(host):
+        return None
+    return host
+
+
+def exit_choices():
+    """[(id as text, name)] for the exits a name can be sent out by."""
+    out = [("0", setting("main_exit_name") or "سرور اصلی")]
+    for r in STORE.q("SELECT * FROM exits WHERE active = 1 ORDER BY id"):
+        out.append((str(r["id"]), r["name"]))
+    return out
 
 
 def ms(value):

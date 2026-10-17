@@ -992,6 +992,36 @@ def clean_exits(exits):
     return out
 
 
+# A name may be given an exit of its own: one hostname, or a suffix written
+# *.name, pointing at an exit id ("0" being this relay's own). It exists
+# because a service can refuse one exit's address and accept another's - EA's
+# Ultimate Team resets one of ours at the TLS handshake and answers another
+# with no complaint - and moving the customer to the other exit moves all
+# their traffic, not just the service that needed it.
+NAME_EXITS_MAX = 200
+HOSTNAME_RE = re.compile(
+    r"^(?:\*\.)?(?!-)[a-z0-9-]{1,63}(?:\.(?!-)[a-z0-9-]{1,63})+$")
+
+
+def clean_name_exits(names, exits):
+    """{name: exit id}, keeping only names nginx can map and exits that exist."""
+    out = {}
+    if not isinstance(names, dict):
+        return out
+    for host, eid in sorted(names.items())[:NAME_EXITS_MAX]:
+        if not (isinstance(host, str) and isinstance(eid, (str, int))):
+            continue
+        host = host.strip().lower().rstrip(".")
+        eid = str(eid)
+        if len(host) > 253 or not HOSTNAME_RE.match(host):
+            continue
+        # "0" is this relay's own exit, which is not in the list of extra ones.
+        if eid != "0" and eid not in exits:
+            continue
+        out[host] = eid
+    return out
+
+
 def note_exit_targets(exits):
     clean = clean_exits(exits)
     with PING_LOCK:
@@ -1116,7 +1146,15 @@ def default_exit():
     return "%s:443" % ip, "%s:80" % ip
 
 
-def exits_conf(exits, assignment, tunnels=None):
+def exit_target(eid, exits, proto):
+    """What to write in a map for one exit id, for one protocol."""
+    if eid == "0":
+        https, http = default_exit()
+        return https if proto == "https" else http
+    return "exit_%s_%s" % (eid, proto)
+
+
+def exits_conf(exits, assignment, tunnels=None, name_exits=None):
     """The nginx include: a map per protocol, and an upstream per extra exit.
 
     A tunnelled exit is reached at its end of the tunnel on loopback, and falls
@@ -1133,6 +1171,17 @@ def exits_conf(exits, assignment, tunnels=None):
             if eid in exits:
                 lines.append("    %s exit_%s_%s;" % (ip, eid, proto))
         lines.append("}")
+    # Where a name goes, whoever asked for it. The default is the map above -
+    # the customer's own exit - so a name with no rule here is untouched, and
+    # this map decides only the names the operator has named. Read from the
+    # TLS handshake, so it is port 443 only: a stream proxy sees no Host on
+    # port 80, and nothing is guessed from an address.
+    lines.append("map $ssl_preread_server_name $smartdns_route_https {")
+    lines.append("    hostnames;")
+    lines.append("    default $smartdns_exit_https;")
+    for host, eid in sorted((name_exits or {}).items()):
+        lines.append("    %s %s;" % (host, exit_target(eid, exits, "https")))
+    lines.append("}")
     tunnels = tunnels or {}
     for eid in sorted(exits, key=int):
         for i, (proto, port) in enumerate((("https", 443), ("http", 80))):
@@ -1155,7 +1204,7 @@ def _write_exits(text):
     os.replace(tmp, EXITS_CONF)
 
 
-def apply_exits(exits, assignment, tunnels=None):
+def apply_exits(exits, assignment, tunnels=None, name_exits=None):
     """Point each address at its exit: rewrite the map and reload nginx - only
     when it has changed, and only if nginx accepts it."""
     if not (CFG or {}).get("EXIT_IP"):
@@ -1170,7 +1219,8 @@ def apply_exits(exits, assignment, tunnels=None):
             continue
         if eid in exits:
             chosen[ip] = eid
-    want = exits_conf(exits, chosen, tunnels)
+    names = clean_name_exits(name_exits, exits)
+    want = exits_conf(exits, chosen, tunnels, names)
     try:
         with open(EXITS_CONF) as fh:
             have = fh.read()
@@ -1190,7 +1240,8 @@ def apply_exits(exits, assignment, tunnels=None):
     if r.returncode != 0:
         log(ERROR, "exits: nginx did not reload: %s" % (r.stderr or "").strip()[-200:])
         return False
-    log(INFO, "exits: %d extra, %d addresses on one of them" % (len(exits), len(chosen)))
+    log(INFO, "exits: %d extra, %d addresses on one of them, %d names of their own"
+        % (len(exits), len(chosen), len(names)))
     return True
 
 
@@ -1301,7 +1352,8 @@ def sync_once():
     try:
         tunnels = apply_exit_tunnels(exits)
         apply_exits(exits, {a["ip"]: str(a.get("exit") or "")
-                            for a in answer.get("allowed") or [] if a.get("ip")}, tunnels)
+                            for a in answer.get("allowed") or [] if a.get("ip")},
+                    tunnels, answer.get("name_exits"))
     except Exception as e:
         log_exception("exits failed: %s" % e)
 
