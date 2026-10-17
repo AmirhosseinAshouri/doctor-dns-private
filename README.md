@@ -236,6 +236,10 @@ in front of the tunnel.
 - BackPack is fetched from its own releases when you ask for it and checked
   against a hash pinned in the installer. It is not part of this project (it is
   AGPL-3.0). A server with no internet: `BACKPACK_TARBALL=/path/to/the.tar.gz`.
+- When an upgrade brings a newer BackPack, every tunnel running on that machine
+  is restarted onto it - the pair's own and one per extra exit. A running tunnel
+  holds the binary that was replaced under it, so without that the file is new
+  and the traffic is still on the old one.
 - The listening end's port answers the other machine and nobody else.
 - Back to plain TCP in one command, on either machine:
   `sudo smartdns-tunnel off`. To change the transport, the port or which end

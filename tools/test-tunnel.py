@@ -316,6 +316,59 @@ if os.path.exists(built_path):
     built = open(built_path, encoding="utf-8").read()
     check("the built installer carries the service", "#__BEGIN_TUNNEL_SERVICE__" in built)
 
+print("installing a new BackPack under a running tunnel")
+# install_backpack, actually run: the download, the hash check and systemctl
+# are stood in for, so what is exercised is the order it does things in and
+# what it restarts afterwards. UNITS is what systemctl says is running.
+def run_install(units, where):
+    script = os.path.join(tmp, "bp-%s.sh" % where)
+    calls = os.path.join(tmp, "systemctl-%s.log" % where)
+    bin_path = os.path.join(tmp, where, "backpack")
+    with open(script, "w", newline="\n", encoding="utf-8") as fh:
+        fh.write("set -u\n")
+        fh.write("\n".join(re.findall(r"^BACKPACK_\w+=.*$", LOGIC, re.M)) + "\n")
+        fh.write('BACKPACK_BIN=%s\n' % posix(bin_path))
+        fh.write('UNITS="%s"\nCALLS=%s\n' % (units, posix(calls)))
+        fh.write('info() { echo "INFO $*"; }\nwarn() { echo "WARN $*"; }\n'
+                 'note_file() { :; }\nuname() { echo x86_64; }\n'
+                 # The archive never arrives over the network here, and the
+                 # hash it is held to is whatever the installer pins.
+                 'curl() { local f=""; while [ $# -gt 0 ]; do'
+                 ' if [ "$1" = -o ]; then f="$2"; shift; fi; shift; done; : > "$f"; }\n'
+                 'sha256sum() { eval "echo \\$BACKPACK_SHA_amd64  -"; }\n'
+                 'tar() { local d="."; while [ $# -gt 0 ]; do'
+                 ' if [ "$1" = -C ]; then d="$2"; shift; fi; shift; done; touch "$d/backpack"; }\n'
+                 'systemctl() { echo "$*" >> "$CALLS"\n'
+                 '  case "$1" in list-units) [ -n "$UNITS" ] && printf "%s\\n" $UNITS'
+                 ' | sed "s/$/ active running/";; esac; return 0; }\n')
+        fh.write(function("install_backpack") + "\ninstall_backpack\n")
+    r = subprocess.run([BASH, posix(script)], capture_output=True, timeout=60)
+    said = r.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+    log = open(calls, encoding="utf-8").read() if os.path.exists(calls) else ""
+    return r.returncode, said, log, bin_path
+
+
+code, said, log, bin_path = run_install(
+    "smartdns-tunnel.service smartdns-tunnel@exit-3.service", "running")
+check("the binary lands where the services look for it",
+      os.path.exists(bin_path), said[-200:])
+check("with the version and hash beside it, for the next run to compare",
+      os.path.exists(bin_path + ".version")
+      and open(bin_path + ".version", encoding="utf-8").read().startswith(
+          re.search(r'BACKPACK_VERSION="(v[\d.]+)"', LOGIC).group(1)))
+check("the tunnel that was running is restarted onto it",
+      "restart smartdns-tunnel.service" in log, log or "systemctl never called")
+check("and so is the tunnel of every extra exit",
+      "restart smartdns-tunnel@exit-3.service" in log, log)
+check("it says which ones it restarted",
+      said.count("restarted on the new BackPack") == 2, said[-300:])
+check("the restart comes after the new binary is in place",
+      said.index("installed, its hash checked") < said.index("restarted on the new"), said[-300:])
+
+code, said, log, _ = run_install("", "quiet")
+check("a machine with no tunnel running restarts nothing, and is not a failure",
+      "restart" not in log and code == 0 and "WARN" not in said, (log + said)[-200:])
+
 shutil.rmtree(tmp, ignore_errors=True)
 print()
 if fails:
