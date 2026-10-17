@@ -177,8 +177,48 @@ check("and does not wait long for one that never comes",
       re.search(r"preread_timeout \d+s;", relay_tpl) is not None)
 check("443 passes to the name's map", "proxy_pass $smartdns_route_https;" in relay_tpl)
 check("80 stays on the customer's exit", "proxy_pass $smartdns_exit_http;" in relay_tpl)
+LOGIC = read("tools", "installer-logic.sh")
 check("the installer writes the map too, before any sync has happened",
-      "$smartdns_route_https" in read("tools", "installer-logic.sh"))
+      "$smartdns_route_https" in LOGIC)
+# The guard used to be the default line alone, which an upgraded relay already
+# has - so the file kept the two maps an older version wrote while nginx.conf
+# passed to a third that was not there, and nginx refused to load it.
+check("and writes it on an upgrade, where the file is already there",
+      "! grep -qs 'smartdns_route_https' /etc/nginx/smartdns-exits.conf" in LOGIC, LOGIC[:0])
+
+
+def first_map(existing, exit_https="to_exit_https"):
+    """Run the installer's own guard over a file that is already there."""
+    d = tempfile.mkdtemp()
+    conf = os.path.join(d, "exits.conf")
+    if existing is not None:
+        with open(conf, "w") as fh:
+            fh.write(existing)
+    block = re.search(r"    note_file /etc/nginx/smartdns-exits\.conf\n(.*?\n    fi\n)",
+                      LOGIC, re.S).group(1)
+    block = block.replace("/etc/nginx/smartdns-exits.conf", conf)
+    script = ('set -u\nEXIT_HTTPS=%s\nEXIT_HTTP=to_exit_http\nNGINX_CHANGED=0\n'
+              % exit_https) + block + '\necho "changed=$NGINX_CHANGED"\n'
+    path = os.path.join(d, "s.sh")
+    with open(path, "w", newline="\n") as fh:
+        fh.write(script)
+    r = subprocess.run(["bash", path], capture_output=True, text=True, timeout=60)
+    text = open(conf).read() if os.path.exists(conf) else ""
+    shutil.rmtree(d, ignore_errors=True)
+    return (r.stdout or "").strip(), text
+
+
+old_file = ("# written by smartdns-sync whenever it changes - edits here are lost\n"
+            "map $remote_addr $smartdns_exit_https {\n    default to_exit_https;\n}\n"
+            "map $remote_addr $smartdns_exit_http {\n    default to_exit_http;\n}\n")
+said, text = first_map(None)
+check("a fresh relay gets all three maps",
+      "changed=1" in said and text.count("map ") == 3 and "smartdns_route_https" in text, text)
+said, text = first_map(old_file)
+check("a relay upgrading from before this feature gets the third one written in",
+      "changed=1" in said and "smartdns_route_https" in text, text)
+said, text = first_map(text)
+check("and a file that already has it is left alone", "changed=0" in said, said)
 
 nginx = shutil.which("nginx")
 if not nginx:
