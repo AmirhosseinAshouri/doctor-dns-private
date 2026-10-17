@@ -1276,7 +1276,13 @@ if [ "$ROLE" = relay ]; then
     # changes - a tunnel switched on or off - which the sync then fills back in
     # within a minute.
     note_file /etc/nginx/smartdns-exits.conf
-    if ! grep -qsF "default ${EXIT_HTTPS};" /etc/nginx/smartdns-exits.conf; then
+    # Rewritten when the default itself changes - a tunnel switched on or off -
+    # and when the file is one an older version wrote, which has no map for the
+    # names that leave by an exit of their own. nginx.conf passes to that map
+    # from this version on, and an upgrade whose sync cannot reach the exit
+    # would otherwise be left with a config nginx refuses to load.
+    if ! grep -qsF "default ${EXIT_HTTPS};" /etc/nginx/smartdns-exits.conf \
+       || ! grep -qs 'smartdns_route_https' /etc/nginx/smartdns-exits.conf; then
         {
             printf '# written by the installer; smartdns-sync keeps it from here\n'
             printf 'map $remote_addr $smartdns_exit_https {\n    default %s;\n}\n' "$EXIT_HTTPS"
